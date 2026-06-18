@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         watcher.stop()
-        sessionWindows.values.forEach { $0.close() }
+        sessionWindows.values.forEach { $0.retire() }
         sessionWindows.removeAll()
         despawnDevMonsters()
     }
@@ -67,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let window = sessionWindows[sessionId], let seed = seedBySession[sessionId] {
             lastFrameBySeed[seed] = window.frame
         }
-        sessionWindows[sessionId]?.close()
+        sessionWindows[sessionId]?.retire()
         sessionWindows[sessionId] = nil
         seedBySession[sessionId] = nil
         Log.lifecycle.notice("- despawn \(sessionId.prefix(8)) live=\(sessionWindows.count)")

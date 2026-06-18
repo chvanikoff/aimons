@@ -8,12 +8,15 @@ final class CompanionWindow: NSPanel {
     private let minBound: CGSize
     private let maxBound: CGSize
 
-    init(seed: UInt64, appearance: AppearanceProvider, pixelScale: CGFloat = 16) {
+    init(seed: UInt64, appearance: AppearanceProvider,
+         pixelScale: CGFloat = RenderConfig.default.pixelScale) {
         let image = appearance.image(for: seed)
         let initial = CGSize(width: CGFloat(image.width) * pixelScale,
                              height: CGFloat(image.height) * pixelScale)
-        self.minBound = CGSize(width: initial.width * 0.5, height: initial.height * 0.5)
-        self.maxBound = CGSize(width: initial.width * 3.0, height: initial.height * 3.0)
+        self.minBound = CGSize(width: initial.width * RenderConfig.default.minScale,
+                               height: initial.height * RenderConfig.default.minScale)
+        self.maxBound = CGSize(width: initial.width * RenderConfig.default.maxScale,
+                               height: initial.height * RenderConfig.default.maxScale)
 
         self.skView = CompanionSKView(frame: NSRect(origin: .zero, size: initial))
         skView.allowsTransparency = true
@@ -32,6 +35,10 @@ final class CompanionWindow: NSPanel {
         isMovableByWindowBackground = true   // drag the monster to move it
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         ignoresMouseEvents = false
+        // Keep NSPanel's default isReleasedWhenClosed = false: we own the window via the
+        // AppDelegate dictionary, and close()+isReleasedWhenClosed=true use-after-frees under ARC
+        // (observed SIGSEGV). We dispose via retire() (orderOut + drop the reference) instead.
+        isReleasedWhenClosed = false
 
         skView.onScaleBy = { [weak self] factor, anchor in
             self?.scaleBy(factor, about: anchor)
@@ -50,6 +57,21 @@ final class CompanionWindow: NSPanel {
     }
 
     override var canBecomeKey: Bool { false }
+
+    deinit { Log.lifecycle.debug("CompanionWindow released") }
+
+    /// Tear down for removal: stop SpriteKit's render loop, drop the scene and view hierarchy
+    /// (releasing the texture and the display link that would otherwise outlive the window),
+    /// and `orderOut`. We deliberately do NOT `close()` — `close()` with a strong ARC reference
+    /// held use-after-frees (observed SIGSEGV). After this, dropping the dictionary reference
+    /// lets ARC reclaim the window.
+    func retire() {
+        skView.isPaused = true
+        skView.presentScene(nil)
+        skView.removeFromSuperview()
+        contentView = nil
+        orderOut(nil)
+    }
 
     // MARK: - Keep the monster on screen
 
