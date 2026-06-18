@@ -211,6 +211,8 @@ Expected: FAIL — `cannot find 'TraitGenerator' in scope`.
 `Sources/AIMonCore/MonsterTraits.swift`:
 
 ```swift
+import Foundation   // for String.capitalized
+
 /// Visual + identity traits for a monster, all derived deterministically from a seed.
 public struct MonsterTraits: Equatable {
     public let hue: Double          // 0..<360
