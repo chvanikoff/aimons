@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let watcher = TranscriptWatcher()
 
     private var sessionWindows: [String: CompanionWindow] = [:]   // sessionId -> window
+    private var seedBySession: [String: UInt64] = [:]             // sessionId -> project seed
+    private var lastFrameBySeed: [UInt64: NSRect] = [:]           // remember where a project's monster sat
     private var devCompanions: [CompanionWindow] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -35,14 +37,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleSessionStarted(_ session: TranscriptWatcher.StartedSession) {
         guard sessionWindows[session.sessionId] == nil else { return }
         let window = CompanionWindow(seed: session.projectSeed, appearance: appearance)
-        cascade(window, index: sessionWindows.count)
+        if let frame = lastFrameBySeed[session.projectSeed] {
+            window.setFrame(frame, display: false)   // resume where this project's monster last sat
+        } else {
+            cascade(window, index: sessionWindows.count)
+        }
         window.orderFrontRegardless()
         sessionWindows[session.sessionId] = window
+        seedBySession[session.sessionId] = session.projectSeed
     }
 
     private func handleSessionEnded(_ sessionId: String) {
+        if let window = sessionWindows[sessionId], let seed = seedBySession[sessionId] {
+            lastFrameBySeed[seed] = window.frame
+        }
         sessionWindows[sessionId]?.close()
         sessionWindows[sessionId] = nil
+        seedBySession[sessionId] = nil
     }
 
     // MARK: - Dev affordance
