@@ -26,6 +26,7 @@ final class TranscriptWatcher {
     private let probeQueue = DispatchQueue(label: "io.romanc.aimon.probe", qos: .utility)
     private var timer: Timer?
     private var isProbing = false
+    private var lastProbeAvailable: Bool?   // for logging probe up/down transitions
 
     init(projectsRoot: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/projects"),
@@ -69,8 +70,18 @@ final class TranscriptWatcher {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.isProbing = false
-                guard let files = files else { return }   // scan failed → skip tick, never mass-despawn
+                guard let files = files else {
+                    Log.watcher.error("transcript scan failed; skipping tick (no despawn)")
+                    return                                // scan failed → skip tick, never mass-despawn
+                }
+                let available = live != nil
+                if available != self.lastProbeAvailable {
+                    Log.watcher.notice("process probe \(available ? "available" : "unavailable")")
+                    self.lastProbeAvailable = available
+                }
                 let outcome = self.engine.step(files: files, liveCWDs: live, now: now)
+                let liveDesc = live == nil ? "down" : String(live!.count)
+                Log.watcher.debug("tick files=\(files.count) live=\(liveDesc) started=\(outcome.started.count) ended=\(outcome.ended.count)")
                 if !outcome.started.isEmpty || !outcome.ended.isEmpty {
                     self.onOutcome?(outcome)
                 }
