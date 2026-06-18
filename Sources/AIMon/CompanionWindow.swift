@@ -33,15 +33,15 @@ final class CompanionWindow: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         ignoresMouseEvents = false
 
-        skView.onScaleBy = { [weak self] factor in
-            self?.scaleBy(factor)
+        skView.onScaleBy = { [weak self] factor, anchor in
+            self?.scaleBy(factor, about: anchor)
         }
 
         let scene = CompanionScene(image: image, size: initial)
         skView.presentScene(scene)
         contentView = skView
 
-        // Place it somewhere visible on first launch.
+        // Place it somewhere visible on first launch (clamped by setFrameOrigin).
         if let screen = NSScreen.main {
             let v = screen.visibleFrame
             setFrameOrigin(NSPoint(x: v.midX - initial.width / 2,
@@ -51,15 +51,31 @@ final class CompanionWindow: NSPanel {
 
     override var canBecomeKey: Bool { false }
 
-    private func scaleBy(_ factor: CGFloat) {
-        var newW = frame.width * factor
-        var newH = frame.height * factor
-        newW = max(minBound.width, min(maxBound.width, newW))
-        newH = max(minBound.height, min(maxBound.height, newH))
-        let center = NSPoint(x: frame.midX, y: frame.midY)
-        let newFrame = NSRect(x: center.x - newW / 2, y: center.y - newH / 2,
-                              width: newW, height: newH)
-        setFrame(newFrame, display: true, animate: false)
-        skView.scene?.size = CGSize(width: newW, height: newH)
+    // MARK: - Keep the monster on screen
+
+    /// Applied by AppKit during managed moves/resizes.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        WindowGeometry.clamp(frameRect, within: CompanionWindow.screenFrames())
+    }
+
+    /// Catches background-drag moves, which bypass constrainFrameRect on borderless windows.
+    override func setFrameOrigin(_ point: NSPoint) {
+        let proposed = CGRect(origin: point, size: frame.size)
+        let clamped = WindowGeometry.clamp(proposed, within: CompanionWindow.screenFrames())
+        super.setFrameOrigin(clamped.origin)
+    }
+
+    // MARK: - Resize
+
+    private func scaleBy(_ factor: CGFloat, about anchor: NSPoint) {
+        let zoomed = WindowGeometry.zoom(frame, factor: factor, about: anchor,
+                                         minBound: minBound, maxBound: maxBound)
+        let clamped = WindowGeometry.clamp(zoomed, within: CompanionWindow.screenFrames())
+        setFrame(clamped, display: true)
+        skView.scene?.size = clamped.size
+    }
+
+    private static func screenFrames() -> [CGRect] {
+        NSScreen.screens.map { $0.frame }
     }
 }
