@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let speechEngine = SpeechEngine()
     private let registry = AIMonRegistry()
+    private let focuser = SessionFocuser()
 
     private var projectWindows: [String: CompanionWindow] = [:]   // cwd -> window (one monster per project)
     private var sessionCountByCwd: [String: Int] = [:]           // cwd -> last seen live session count
@@ -93,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             cascade(window, index: projectWindows.count)
         }
+        window.onClick = { [weak self] in self?.focuser.focus(projectCWD: ref.cwd) }
         if aimonsVisible { window.orderFrontRegardless() }
         projectWindows[ref.cwd] = window
         sessionCountByCwd[ref.cwd] = ref.sessionCount

@@ -7,6 +7,8 @@ final class CompanionWindow: NSPanel {
     private let skView: CompanionSKView
     private let minBound: CGSize
     private let maxBound: CGSize
+    /// Called when the monster is clicked (not dragged).
+    var onClick: (() -> Void)?
 
     init(seed: UInt64, appearance: AppearanceProvider,
          pixelScale: CGFloat = RenderConfig.default.pixelScale) {
@@ -42,6 +44,10 @@ final class CompanionWindow: NSPanel {
 
         skView.onScaleBy = { [weak self] factor, anchor in
             self?.scaleBy(factor, about: anchor)
+        }
+        skView.onClick = { [weak self] in
+            (self?.skView.scene as? CompanionScene)?.reactExcited()   // a little "pet" reaction
+            self?.onClick?()
         }
 
         let closedEyes = appearance.image(for: seed, eyesClosed: true)
