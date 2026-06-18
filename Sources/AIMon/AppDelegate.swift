@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var sessionWindows: [String: CompanionWindow] = [:]   // sessionId -> window
     private var seedBySession: [String: UInt64] = [:]             // sessionId -> project seed
-    private var lastFrameBySeed: [UInt64: NSRect] = [:]           // remember where a project's monster sat
+    private var lastFrameBySeed: [UInt64: NSRect] = [:]           // per-project position memory (outlives sessions)
     private var devCompanions: [CompanionWindow] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -18,37 +18,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "AIMon (preview)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Spawn random monster (dev)",
-                                action: #selector(spawnDevMonster),
-                                keyEquivalent: "n"))
+                                action: #selector(spawnDevMonster), keyEquivalent: "n"))
+        menu.addItem(NSMenuItem(title: "Despawn dev monsters",
+                                action: #selector(despawnDevMonsters), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit",
-                                action: #selector(NSApplication.terminate(_:)),
-                                keyEquivalent: "q"))
+                                action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         item.menu = menu
         self.statusItem = item
 
-        watcher.onStarted = { [weak self] session in self?.handleSessionStarted(session) }
-        watcher.onEnded = { [weak self] sessionId in self?.handleSessionEnded(sessionId) }
+        watcher.onOutcome = { [weak self] outcome in self?.apply(outcome) }
         watcher.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        watcher.stop()
+        sessionWindows.values.forEach { $0.close() }
+        sessionWindows.removeAll()
+        despawnDevMonsters()
     }
 
     // MARK: - Session-driven windows
 
-    private func handleSessionStarted(_ session: TranscriptWatcher.StartedSession) {
-        guard sessionWindows[session.sessionId] == nil else { return }
-        let window = CompanionWindow(seed: session.projectSeed, appearance: appearance)
-        if let frame = lastFrameBySeed[session.projectSeed] {
-            window.setFrame(frame, display: false)   // resume where this project's monster last sat
+    private func apply(_ outcome: WatchOutcome) {
+        for ref in outcome.started { spawn(ref) }
+        for id in outcome.ended { despawn(id) }
+    }
+
+    private func spawn(_ ref: SessionRef) {
+        guard sessionWindows[ref.sessionId] == nil else { return }
+        let window = CompanionWindow(seed: ref.seed, appearance: appearance)
+        if let frame = lastFrameBySeed[ref.seed] {
+            window.setFrame(frame, display: false)        // resume where this project's monster last sat
         } else {
             cascade(window, index: sessionWindows.count)
         }
         window.orderFrontRegardless()
-        sessionWindows[session.sessionId] = window
-        seedBySession[session.sessionId] = session.projectSeed
-        NSLog("AIMon: + spawn \(session.sessionId.prefix(8)) cwd=\(session.cwd) live=\(sessionWindows.count)")
+        sessionWindows[ref.sessionId] = window
+        seedBySession[ref.sessionId] = ref.seed
+        NSLog("AIMon: + spawn \(ref.sessionId.prefix(8)) cwd=\(ref.cwd) live=\(sessionWindows.count)")
     }
 
-    private func handleSessionEnded(_ sessionId: String) {
+    private func despawn(_ sessionId: String) {
         if let window = sessionWindows[sessionId], let seed = seedBySession[sessionId] {
             lastFrameBySeed[seed] = window.frame
         }
@@ -68,8 +79,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         devCompanions.append(window)
     }
 
+    @objc private func despawnDevMonsters() {
+        devCompanions.forEach { $0.close() }
+        devCompanions.removeAll()
+    }
+
     private func cascade(_ window: CompanionWindow, index: Int) {
-        let step = CGFloat(index % 6) * 40
+        let step = CGFloat(index % 6) * RenderConfig.default.cascadeStep
         var origin = window.frame.origin
         origin.x += step
         origin.y -= step

@@ -45,17 +45,16 @@ public enum ProcessScan {
     ///   - `[]`   → no `claude` CLI running (a *trustworthy* empty: every session may end).
     ///   - `[..]` → the live cwds.
     ///
-    /// `claudePIDs == nil` means `ps` failed. `lsofExitOK == false` (or nil output) means
-    /// `lsof` errored. Crucially, if `lsof` returns FEWER cwds than pids — which happens when
-    /// a pid dies in the TOCTOU gap between the `ps` and `lsof` shell-outs, so lsof drops it
-    /// and exits non-zero — we return `nil` rather than a partial undercount that would
-    /// wrongly despawn a live session.
-    public static func resolveLiveCWDs(claudePIDs: [String]?,
-                                       lsofOutput: String?,
-                                       lsofExitOK: Bool) -> [String]? {
+    /// `claudePIDs == nil` means `ps` failed. `lsofOutput == nil` means `lsof` couldn't run
+    /// (or timed out). Crucially, the **count guard** is the authority: if `lsof` returns
+    /// fewer cwds than pids — which happens when a pid dies in the TOCTOU gap between the
+    /// `ps` and `lsof` shell-outs (lsof drops it and exits non-zero, verified empirically) —
+    /// we return `nil` rather than a partial undercount that would wrongly despawn a live
+    /// session. lsof's own exit status is quirky and unreliable, so it is deliberately not used.
+    public static func resolveLiveCWDs(claudePIDs: [String]?, lsofOutput: String?) -> [String]? {
         guard let pids = claudePIDs else { return nil }      // ps failed
         if pids.isEmpty { return [] }                         // no claude running — trustworthy empty
-        guard lsofExitOK, let output = lsofOutput else { return nil }   // lsof failed
+        guard let output = lsofOutput else { return nil }     // lsof couldn't run
         let resolved = cwds(fromLSOF: output)
         guard resolved.count == pids.count else { return nil }          // undercount → unreliable
         return resolved

@@ -1,52 +1,51 @@
 import Foundation
 import AIMonCore
 
-/// Polls ~/.claude/projects for live Claude Code session transcripts and reports
-/// session start/end. Polling (not FSEvents) is intentional for v1: simple and robust.
+/// Thin impure shell around the pure `SessionWatchEngine`.
 ///
-/// Spawning is driven by transcript mtime; ending is driven by whether a live
-/// `claude` CLI process still backs the session's project — so an idle session
-/// doesn't falsely despawn, and Ctrl-C despawns within one poll instead of after
-/// a long stale timeout.
+/// **Threading contract** (the safety here is queue confinement, not the compiler — full
+/// `@MainActor`/`Sendable` annotations arrive with the deliberate Swift-6 tools bump):
+///  - A `Timer` on `RunLoop.main` (`.common` mode, so liveness keeps updating during drags
+///    and menu tracking) fires each tick on the **main thread**.
+///  - The filesystem scan (`store.scan()`) and the `ps`/`lsof` probe (`probe.liveCWDs()`) —
+///    the only blocking I/O — run on a **background serial queue**. A hung probe can never
+///    freeze the UI.
+///  - The engine decision and `onOutcome` delivery happen back on the **main thread**.
+///  - `engine`/`isProbing` are touched only on main; `store`/`probe` only on `probeQueue`.
+///    `isProbing` skips overlapping ticks so a slow probe can't pile up.
 final class TranscriptWatcher {
-    struct StartedSession {
-        let sessionId: String
-        let cwd: String
-        let projectSeed: UInt64
-    }
+    /// Delivered on the main thread whenever a tick changes the live set.
+    var onOutcome: ((WatchOutcome) -> Void)?
 
-    var onStarted: ((StartedSession) -> Void)?
-    var onEnded: ((String) -> Void)?
+    private let engine: SessionWatchEngine
+    private let store: TranscriptStore
+    private let probe: ProcessProbe
+    private let clock: Clock
+    private let config: WatcherConfig
 
-    private let projectsRoot: URL
-    private let pollInterval: TimeInterval
-    private let liveWindow: TimeInterval
-    private let staleTimeout: TimeInterval
-    /// Returns the cwds of live `claude` CLI processes, or nil if the probe is
-    /// unavailable (so the reconciler falls back to the mtime timeout). Injectable for tests.
-    private let liveCWDsProvider: () -> [String]?
-
-    private var tracked: [String: String] = [:]   // sessionId -> standardized cwd
-    private var urlBySession: [String: URL] = [:]
+    private let probeQueue = DispatchQueue(label: "io.romanc.aimon.probe", qos: .utility)
     private var timer: Timer?
+    private var isProbing = false
 
     init(projectsRoot: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/projects"),
-         pollInterval: TimeInterval = 2,
-         liveWindow: TimeInterval = 30,
-         staleTimeout: TimeInterval = 90,
-         liveCWDsProvider: @escaping () -> [String]? = TranscriptWatcher.scanLiveClaudeCWDs) {
-        self.projectsRoot = projectsRoot
-        self.pollInterval = pollInterval
-        self.liveWindow = liveWindow
-        self.staleTimeout = staleTimeout
-        self.liveCWDsProvider = liveCWDsProvider
+         config: WatcherConfig = .default,
+         store: TranscriptStore? = nil,
+         probe: ProcessProbe? = nil,
+         clock: Clock = SystemClock()) {
+        self.config = config
+        self.engine = SessionWatchEngine(config: config)
+        self.store = store ?? FileTranscriptStore(projectsRoot: projectsRoot, config: config)
+        self.probe = probe ?? ProcessProbeCLI(config: config)
+        self.clock = clock
     }
 
     func start() {
-        let t = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in self?.tick() }
+        let t = Timer(timeInterval: config.pollInterval, repeats: true) { [weak self] _ in
+            self?.tick()
+        }
         t.tolerance = 0.5
-        RunLoop.main.add(t, forMode: .common)   // keep ticking during menu tracking / drags
+        RunLoop.main.add(t, forMode: .common)
         self.timer = t
         tick()
     }
@@ -56,101 +55,26 @@ final class TranscriptWatcher {
         timer = nil
     }
 
+    // MARK: - Tick (main → background I/O → main)
+
     private func tick() {
-        let files = scanFiles()
-        let counts = liveCWDsProvider().map { ProcessScan.counts(of: $0.map(Self.standardize)) }
-        let trackedSessions = tracked.map { TrackedSession(sessionId: $0.key, cwd: $0.value) }
-
-        let decision = WatcherReconciler.reconcile(
-            files: files, tracked: trackedSessions, liveCWDCounts: counts,
-            now: Date(), liveWindow: liveWindow, staleTimeout: staleTimeout)
-
-        for id in decision.toStart {
-            guard let url = urlBySession[id], let rawCwd = cwdFromFile(url) else { continue }
-            let cwd = Self.standardize(rawCwd)
-            let trackedAtCwd = tracked.values.filter { $0 == cwd }.count
-            guard WatcherReconciler.canSpawn(cwd: cwd, trackedAtCwd: trackedAtCwd, liveCWDCounts: counts)
-            else { continue }   // directory already has as many monsters as live processes
-            tracked[id] = cwd
-            onStarted?(StartedSession(sessionId: id, cwd: cwd, projectSeed: ProjectIdentity.seed(forCWD: cwd)))
-        }
-        for id in decision.toEnd {
-            tracked[id] = nil
-            onEnded?(id)
-        }
-    }
-
-    /// Enumerate ~/.claude/projects/*/*.jsonl, recording each session's mtime and URL.
-    private func scanFiles() -> [TranscriptFile] {
-        let fm = FileManager.default
-        guard let projectDirs = try? fm.contentsOfDirectory(
-            at: projectsRoot,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]) else { return [] }
-
-        var result: [TranscriptFile] = []
-        var urls: [String: URL] = [:]
-        for dir in projectDirs {
-            let isDir = (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            guard isDir else { continue }
-            guard let entries = try? fm.contentsOfDirectory(
-                at: dir,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]) else { continue }
-            for url in entries where url.pathExtension == "jsonl" {
-                let sessionId = url.deletingPathExtension().lastPathComponent
-                let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                    .contentModificationDate ?? Date.distantPast
-                result.append(TranscriptFile(sessionId: sessionId, lastModified: mtime))
-                urls[sessionId] = url
+        guard !isProbing else { return }
+        isProbing = true
+        let store = self.store
+        let probe = self.probe
+        let now = clock.now()
+        probeQueue.async { [weak self] in
+            let files = store.scan()
+            let live = probe.liveCWDs()
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isProbing = false
+                guard let files = files else { return }   // scan failed → skip tick, never mass-despawn
+                let outcome = self.engine.step(files: files, liveCWDs: live, now: now)
+                if !outcome.started.isEmpty || !outcome.ended.isEmpty {
+                    self.onOutcome?(outcome)
+                }
             }
         }
-        urlBySession = urls
-        return result
-    }
-
-    /// Read the first 64 KB of a transcript and return the first cwd found.
-    private func cwdFromFile(_ url: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-        let chunk = handle.readData(ofLength: 64 * 1024)
-        guard let text = String(data: chunk, encoding: .utf8) else { return nil }
-        for line in text.split(separator: "\n") {
-            if let meta = TranscriptDecoder.meta(fromLine: String(line)), let cwd = meta.cwd {
-                return cwd
-            }
-        }
-        return nil
-    }
-
-    // MARK: - Process probe (impure; parsing lives in AIMonCore.ProcessScan)
-
-    private static func standardize(_ path: String) -> String {
-        URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-    }
-
-    /// cwds of every live `claude` CLI process, via `ps` (to match argv, since the
-    /// process *name* is the version string) then `lsof` (for each pid's cwd).
-    /// Returns nil only if the probe itself can't run, so liveness degrades to mtime.
-    static func scanLiveClaudeCWDs() -> [String]? {
-        guard let psOut = run("/bin/ps", ["-axww", "-o", "pid=", "-o", "command="]) else { return nil }
-        let pids = ProcessScan.claudePIDs(fromPS: psOut)
-        if pids.isEmpty { return [] }   // no claude CLI running — a legitimate empty result
-        guard let lsofOut = run("/usr/sbin/lsof",
-                                ["-a", "-p", pids.joined(separator: ","), "-d", "cwd", "-Fn"]) else { return nil }
-        return ProcessScan.cwds(fromLSOF: lsofOut)
-    }
-
-    private static func run(_ launchPath: String, _ args: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: launchPath)
-        process.arguments = args
-        let out = Pipe()
-        process.standardOutput = out
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(data: data, encoding: .utf8)
     }
 }
