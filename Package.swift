@@ -6,6 +6,10 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .target(name: "AIMonCore"),
+        .executableTarget(
+            name: "AIMon",
+            dependencies: ["AIMonCore"]
+        ),
         .testTarget(
             name: "AIMonCoreTests",
             dependencies: ["AIMonCore"]
