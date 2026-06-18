@@ -35,10 +35,6 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .target(name: "AIMonCore"),
-        .executableTarget(
-            name: "AIMon",
-            dependencies: ["AIMonCore"]
-        ),
         .testTarget(
             name: "AIMonCoreTests",
             dependencies: ["AIMonCore"]
@@ -46,6 +42,10 @@ let package = Package(
     ]
 )
 ```
+
+> Note: the `AIMon` executable target is intentionally **not** declared yet —
+> SwiftPM errors if a target has no source files. Task 7 adds it once
+> `Sources/AIMon/` exists.
 
 - [ ] **Step 2: Add a placeholder so `AIMonCore` compiles**
 
@@ -626,8 +626,20 @@ git commit -m "$(printf 'feat: add swappable AppearanceProvider with ProceduralA
 First executable task. No window yet — just prove the app launches as a menu-bar agent.
 
 **Files:**
+- Modify: `Package.swift`
 - Create: `Sources/AIMon/main.swift`
 - Create: `Sources/AIMon/AppDelegate.swift`
+
+- [ ] **Step 0: Add the executable target to `Package.swift`**
+
+Add the executable target to the `targets:` array (between `AIMonCore` and the test target):
+
+```swift
+        .executableTarget(
+            name: "AIMon",
+            dependencies: ["AIMonCore"]
+        ),
+```
 
 - [ ] **Step 1: Write the app entry point**
 
