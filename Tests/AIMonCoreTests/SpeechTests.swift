@@ -41,4 +41,50 @@ final class SpeechTests: XCTestCase {
         let grumpy = TemplateSpeech.line(trigger: .sessionJoined(count: 2), archetype: .grumpy)
         XCTAssertNotEqual(cheerful, grumpy)
     }
+
+    // MARK: - Prompt
+
+    func test_prompt_includesPersonaAndEvent() {
+        let ctx = SpeechContext(archetype: .grumpy, trigger: .sessionJoined(count: 2), projectName: "aimon", sessionCount: 2)
+        let p = SpeechPrompt.build(for: ctx)
+        XCTAssertTrue(p.contains("grumpy"))
+        XCTAssertTrue(p.contains("aimon"))
+        XCTAssertTrue(p.contains("2"))
+        XCTAssertTrue(p.lowercased().contains("no emoji"))
+    }
+
+    // MARK: - Cadence
+
+    func test_cadence_allowsWhenNeverSpoken() {
+        XCTAssertTrue(SpeechCadence.shouldSpeak(lastSpoke: nil, now: Date(), cooldown: 10))
+    }
+
+    func test_cadence_blocksWithinCooldown_allowsAfter() {
+        let now = Date(timeIntervalSince1970: 1000)
+        XCTAssertFalse(SpeechCadence.shouldSpeak(lastSpoke: now.addingTimeInterval(-5), now: now, cooldown: 10))
+        XCTAssertTrue(SpeechCadence.shouldSpeak(lastSpoke: now.addingTimeInterval(-15), now: now, cooldown: 10))
+    }
+
+    // MARK: - Ollama response parsing
+
+    func test_ollamaParse_extractsResponse() {
+        let json = Data(#"{"model":"llama3.2:3b","response":"Two of you now? Let's go!","done":true}"#.utf8)
+        XCTAssertEqual(OllamaResponseParser.line(fromJSON: json), "Two of you now? Let's go!")
+    }
+
+    func test_ollamaParse_nilOnMissingField() {
+        XCTAssertNil(OllamaResponseParser.line(fromJSON: Data(#"{"done":true}"#.utf8)))
+        XCTAssertNil(OllamaResponseParser.line(fromJSON: Data("not json".utf8)))
+    }
+
+    func test_tidy_stripsQuotesAndExtraLines() {
+        XCTAssertEqual(OllamaResponseParser.tidy("  \"Hello there\"\n\nextra "), "Hello there")
+    }
+
+    func test_tidy_capsLengthAtWordBoundary() {
+        let long = String(repeating: "word ", count: 60)
+        let tidied = OllamaResponseParser.tidy(long, maxLength: 40)
+        XCTAssertLessThanOrEqual(tidied.count, 41)
+        XCTAssertTrue(tidied.hasSuffix("…"))
+    }
 }

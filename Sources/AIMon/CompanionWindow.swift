@@ -78,16 +78,13 @@ final class CompanionWindow: NSPanel {
     // MARK: - Speech bubble
 
     private var bubble: SpeechBubbleWindow?
-    private var lastSpoke: Date?
-    private let speechCooldown: TimeInterval = 4   // basic anti-spam; the M4 Brain will govern cadence properly
 
-    /// Show a speech bubble above the monster (rate-limited).
-    func say(_ text: String) {
-        let now = Date()
-        if let last = lastSpoke, now.timeIntervalSince(last) < speechCooldown { return }
-        lastSpoke = now
+    /// Render a speech bubble above the monster (cadence/anti-spam is governed by the caller).
+    /// Calling again before the bubble dismisses replaces the text — used to swap the instant
+    /// template floor for the upgraded Ollama line.
+    func showSpeech(_ text: String) {
         if bubble == nil { bubble = SpeechBubbleWindow() }
-        bubble?.show(text, above: frame, duration: 5)
+        bubble?.show(text, above: frame, duration: 6)
     }
 
     /// Show/hide both the monster and its bubble (for the menubar visibility toggle).

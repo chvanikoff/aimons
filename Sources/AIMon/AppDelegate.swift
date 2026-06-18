@@ -7,11 +7,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appearance: AppearanceProvider = ProceduralAppearance()
     private let watcher = TranscriptWatcher()
 
+    private let speechEngine = SpeechEngine()
+
     private var projectWindows: [String: CompanionWindow] = [:]   // cwd -> window (one monster per project)
     private var sessionCountByCwd: [String: Int] = [:]           // cwd -> last seen live session count
+    private var lastSpokeByCwd: [String: Date] = [:]            // cwd -> last time the monster spoke (cadence)
     private var lastFrameByCwd: [String: NSRect] = [:]            // per-project position memory (outlives sessions)
     private var devCompanions: [CompanionWindow] = []
     private var aimonsVisible = true
+    private let speechCooldown: TimeInterval = 4
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusItem.button(in: NSStatusBar.system)
@@ -78,12 +82,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount)")
             return
         }
-        let archetype = PersonalityGenerator.archetype(seed: ref.seed)
+        let now = Date()
+        guard SpeechCadence.shouldSpeak(lastSpoke: lastSpokeByCwd[ref.cwd], now: now, cooldown: speechCooldown) else {
+            Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) (cooldown)")
+            return
+        }
+        lastSpokeByCwd[ref.cwd] = now
         let trigger: SpeechTrigger = ref.sessionCount > prev
             ? .sessionJoined(count: ref.sessionCount)
             : .sessionLeft(count: ref.sessionCount)
-        window?.say(TemplateSpeech.line(trigger: trigger, archetype: archetype, variant: ref.sessionCount))
-        Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) speak(\(archetype.rawValue))")
+        let context = SpeechContext(archetype: PersonalityGenerator.archetype(seed: ref.seed),
+                                    trigger: trigger,
+                                    projectName: projectName(ref.cwd),
+                                    sessionCount: ref.sessionCount)
+        speechEngine.speak(context) { [weak window] line in window?.showSpeech(line) }
+        Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) speak(\(context.archetype.rawValue))")
     }
 
     private func despawn(_ cwd: String) {
@@ -91,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         projectWindows[cwd]?.retire()
         projectWindows[cwd] = nil
         sessionCountByCwd[cwd] = nil
+        lastSpokeByCwd[cwd] = nil
         Log.lifecycle.notice("- despawn project \(projectLabel(cwd)) live=\(projectWindows.count)")
     }
 
@@ -100,6 +114,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #else
         return (cwd as NSString).lastPathComponent
         #endif
+    }
+
+    /// The project's short name (last path component) — used in speech, never the full path.
+    private func projectName(_ cwd: String) -> String {
+        let name = (cwd as NSString).lastPathComponent
+        return name.isEmpty ? "this project" : name
     }
 
     // MARK: - Visibility toggle

@@ -57,3 +57,89 @@ public enum TemplateSpeech {
         .dramatic: ["One falls! The quest continues!", "A session departs into the void..."],
     ]
 }
+
+/// Everything needed to compose a spoken line — personality + what just happened.
+public struct SpeechContext: Equatable, Sendable {
+    public let archetype: CompanionArchetype
+    public let trigger: SpeechTrigger
+    public let projectName: String
+    public let sessionCount: Int
+
+    public init(archetype: CompanionArchetype, trigger: SpeechTrigger, projectName: String, sessionCount: Int) {
+        self.archetype = archetype
+        self.trigger = trigger
+        self.projectName = projectName
+        self.sessionCount = sessionCount
+    }
+}
+
+/// Builds the LLM prompt for a context — in-character, one short line, no emoji, no path leaks.
+public enum SpeechPrompt {
+    public static func build(for ctx: SpeechContext) -> String {
+        """
+        You are a tiny pixel-art desktop monster living on a programmer's screen, watching their \
+        coding sessions. Your personality: \(persona(ctx.archetype)).
+        React to the event below in ONE short, in-character sentence (max 14 words). No emoji. \
+        Do not mention file paths or secrets. Reply with only the sentence.
+        Event: \(event(ctx.trigger, projectName: ctx.projectName))
+        """
+    }
+
+    static func persona(_ a: CompanionArchetype) -> String {
+        switch a {
+        case .cheerful: return "upbeat, warm, and encouraging"
+        case .grumpy:   return "grumpy and sarcastic, but secretly caring"
+        case .chill:    return "laid-back, calm, and unbothered"
+        case .dramatic: return "theatrical and gloriously over-the-top"
+        }
+    }
+
+    static func event(_ trigger: SpeechTrigger, projectName: String) -> String {
+        switch trigger {
+        case .sessionStarted:
+            return "your human just started a coding session in the project \"\(projectName)\"."
+        case .sessionJoined(let count):
+            return "your human opened another session in \"\(projectName)\" — there are now \(count) at once."
+        case .sessionLeft(let count):
+            return "a session in \"\(projectName)\" just closed — \(count) still running."
+        }
+    }
+}
+
+/// Pure cadence gate: has enough time passed since the monster last spoke?
+public enum SpeechCadence {
+    public static func shouldSpeak(lastSpoke: Date?, now: Date, cooldown: TimeInterval) -> Bool {
+        guard let last = lastSpoke else { return true }
+        return now.timeIntervalSince(last) >= cooldown
+    }
+}
+
+/// Pure parsing/cleanup of an Ollama `/api/generate` response.
+public enum OllamaResponseParser {
+    public static func line(fromJSON data: Data) -> String? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let response = obj["response"] as? String else { return nil }
+        let tidied = tidy(response)
+        return tidied.isEmpty ? nil : tidied
+    }
+
+    /// Trim, drop wrapping quotes, keep the first non-empty line, cap length at a word boundary.
+    public static func tidy(_ raw: String, maxLength: Int = 140) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let firstLine = s.split(separator: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            s = String(firstLine).trimmingCharacters(in: .whitespaces)
+        }
+        if s.count >= 2, s.first == "\"", s.last == "\"" {
+            s = String(s.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        if s.count > maxLength {
+            let capped = String(s.prefix(maxLength))
+            if let lastSpace = capped.lastIndex(of: " ") {
+                s = String(capped[..<lastSpace]) + "…"
+            } else {
+                s = capped + "…"
+            }
+        }
+        return s
+    }
+}
