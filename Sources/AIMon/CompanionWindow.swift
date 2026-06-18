@@ -66,11 +66,38 @@ final class CompanionWindow: NSPanel {
     /// held use-after-frees (observed SIGSEGV). After this, dropping the dictionary reference
     /// lets ARC reclaim the window.
     func retire() {
+        bubble?.dismiss()
+        bubble?.orderOut(nil)
         skView.isPaused = true
         skView.presentScene(nil)
         skView.removeFromSuperview()
         contentView = nil
         orderOut(nil)
+    }
+
+    // MARK: - Speech bubble
+
+    private var bubble: SpeechBubbleWindow?
+    private var lastSpoke: Date?
+    private let speechCooldown: TimeInterval = 4   // basic anti-spam; the M4 Brain will govern cadence properly
+
+    /// Show a speech bubble above the monster (rate-limited).
+    func say(_ text: String) {
+        let now = Date()
+        if let last = lastSpoke, now.timeIntervalSince(last) < speechCooldown { return }
+        lastSpoke = now
+        if bubble == nil { bubble = SpeechBubbleWindow() }
+        bubble?.show(text, above: frame, duration: 5)
+    }
+
+    /// Show/hide both the monster and its bubble (for the menubar visibility toggle).
+    func setVisible(_ visible: Bool) {
+        if visible {
+            orderFrontRegardless()
+        } else {
+            bubble?.orderOut(nil)
+            orderOut(nil)
+        }
     }
 
     // MARK: - Session count (context the monster reacts to)

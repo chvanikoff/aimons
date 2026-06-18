@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let watcher = TranscriptWatcher()
 
     private var projectWindows: [String: CompanionWindow] = [:]   // cwd -> window (one monster per project)
+    private var sessionCountByCwd: [String: Int] = [:]           // cwd -> last seen live session count
     private var lastFrameByCwd: [String: NSRect] = [:]            // per-project position memory (outlives sessions)
     private var devCompanions: [CompanionWindow] = []
     private var aimonsVisible = true
@@ -63,19 +64,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if aimonsVisible { window.orderFrontRegardless() }
         projectWindows[ref.cwd] = window
+        sessionCountByCwd[ref.cwd] = ref.sessionCount
         Log.lifecycle.notice("+ spawn project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) live=\(projectWindows.count)")
     }
 
-    /// Session count changed for a live project — the monster reacts (and M4 speech can use it).
+    /// Session count changed for a live project — the monster reacts (pop) and speaks.
     private func updateSessionCount(_ ref: ProjectRef) {
-        projectWindows[ref.cwd]?.setSessionCount(ref.sessionCount, animated: aimonsVisible)
-        Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount)")
+        let prev = sessionCountByCwd[ref.cwd] ?? ref.sessionCount
+        sessionCountByCwd[ref.cwd] = ref.sessionCount
+        let window = projectWindows[ref.cwd]
+        window?.setSessionCount(ref.sessionCount, animated: aimonsVisible)
+        guard aimonsVisible else {
+            Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount)")
+            return
+        }
+        let archetype = PersonalityGenerator.archetype(seed: ref.seed)
+        let trigger: SpeechTrigger = ref.sessionCount > prev
+            ? .sessionJoined(count: ref.sessionCount)
+            : .sessionLeft(count: ref.sessionCount)
+        window?.say(TemplateSpeech.line(trigger: trigger, archetype: archetype, variant: ref.sessionCount))
+        Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) speak(\(archetype.rawValue))")
     }
 
     private func despawn(_ cwd: String) {
         if let window = projectWindows[cwd] { lastFrameByCwd[cwd] = window.frame }
         projectWindows[cwd]?.retire()
         projectWindows[cwd] = nil
+        sessionCountByCwd[cwd] = nil
         Log.lifecycle.notice("- despawn project \(projectLabel(cwd)) live=\(projectWindows.count)")
     }
 
@@ -92,13 +107,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleVisibility() {
         aimonsVisible.toggle()
         visibilityItem?.state = aimonsVisible ? .on : .off
-        let windows = projectWindows.values + devCompanions
-        if aimonsVisible {
-            windows.forEach { $0.orderFrontRegardless() }
-        } else {
-            windows.forEach { $0.orderOut(nil) }   // hide only; the watcher keeps running
-        }
-        Log.lifecycle.notice("aimons \(aimonsVisible ? "visible" : "hidden")")
+        projectWindows.values.forEach { $0.setVisible(aimonsVisible) }   // hides bubble too
+        devCompanions.forEach { aimonsVisible ? $0.orderFrontRegardless() : $0.orderOut(nil) }
+        Log.lifecycle.notice("aimons \(aimonsVisible ? "visible" : "hidden")")   // watcher keeps running
     }
 
     // MARK: - Dev affordance
