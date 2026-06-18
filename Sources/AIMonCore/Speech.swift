@@ -6,13 +6,6 @@ public enum CompanionArchetype: String, CaseIterable, Sendable {
     case cheerful, grumpy, chill, dramatic
 }
 
-public enum PersonalityGenerator {
-    public static func archetype(seed: UInt64) -> CompanionArchetype {
-        let all = CompanionArchetype.allCases
-        return all[Int(seed % UInt64(all.count))]
-    }
-}
-
 /// Why the monster is speaking — derived from session lifecycle (richer transcript-activity
 /// triggers come later, once the per-session activity reader exists).
 public enum SpeechTrigger: Equatable, Sendable {
