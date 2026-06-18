@@ -37,17 +37,19 @@ public struct WatchDecision: Equatable {
 public enum WatcherReconciler {
     /// Diffs transcript `files` and live-process info against `tracked` sessions.
     ///
-    /// Spawning is still mtime-gated: only a freshly written, untracked transcript
-    /// starts a session (so dormant old transcripts in a live project don't wake up).
+    /// Spawn and end use the *same* signal — a live `claude` process backing the
+    /// session's directory — so they can't fight and flap. `liveCWDCounts` maps a
+    /// cwd to how many live processes run there; `nil` means the probe was
+    /// unavailable, so we degrade to the mtime timeout.
     ///
-    /// Ending is process-aware. `liveCWDCounts` maps each cwd to how many live
-    /// `claude` processes run there; `nil` means the probe was unavailable, in which
-    /// case we fall back to the pure mtime timeout (old behaviour). With the probe:
-    ///   - file vanished              → end
-    ///   - no live process for cwd    → end now (fast despawn on Ctrl-C)
-    ///   - procs ≥ tracked-in-cwd     → keep (every session is backed; idle is safe)
-    ///   - 0 < procs < tracked-in-cwd → ambiguous (multiple sessions share a project,
-    ///                                  one ended) → fall back to the stale timeout
+    /// `toStart` here is only a *candidate* list (freshly written, untracked); the
+    /// watcher applies `shouldSpawn` once it has resolved each candidate's cwd,
+    /// since `TranscriptFile` doesn't carry one. Ending:
+    ///   - file vanished            → end
+    ///   - no live process for cwd  → end, and stays ended (freshness can't resurrect it)
+    ///   - any live process for cwd → keep (idle-safe; all same-dir twins persist
+    ///                                until the last process for that dir exits)
+    ///   - probe unavailable        → fall back to the mtime stale timeout
     public static func reconcile(files: [TranscriptFile],
                                  tracked: [TrackedSession],
                                  liveCWDCounts: [String: Int]?,
@@ -56,9 +58,6 @@ public enum WatcherReconciler {
                                  staleTimeout: TimeInterval) -> WatchDecision {
         let trackedIds = Set(tracked.map(\.sessionId))
         let byId = Dictionary(files.map { ($0.sessionId, $0) }, uniquingKeysWith: { a, _ in a })
-
-        var trackedPerCWD: [String: Int] = [:]
-        for t in tracked { trackedPerCWD[t.cwd, default: 0] += 1 }
 
         var toStart: [String] = []
         for f in files where !trackedIds.contains(f.sessionId) {
@@ -70,25 +69,21 @@ public enum WatcherReconciler {
         var toEnd: [String] = []
         for t in tracked {
             guard let f = byId[t.sessionId] else { toEnd.append(t.sessionId); continue }  // vanished
-
-            guard let counts = liveCWDCounts else {                                        // probe unavailable
-                if SessionLiveness.isEnded(lastModified: f.lastModified, now: now, staleTimeout: staleTimeout) {
-                    toEnd.append(t.sessionId)
-                }
-                continue
-            }
-
-            let procs = counts[t.cwd] ?? 0
-            let trackedHere = trackedPerCWD[t.cwd] ?? 1
-            if procs == 0 {
-                toEnd.append(t.sessionId)                                                  // CLI gone → fast despawn
-            } else if procs >= trackedHere {
-                continue                                                                   // backed → keep (idle safe)
+            if let counts = liveCWDCounts {
+                if (counts[t.cwd] ?? 0) == 0 { toEnd.append(t.sessionId) }                // no live claude here
             } else if SessionLiveness.isEnded(lastModified: f.lastModified, now: now, staleTimeout: staleTimeout) {
-                toEnd.append(t.sessionId)                                                   // ambiguous → stale backstop
+                toEnd.append(t.sessionId)                                                  // probe down → mtime fallback
             }
         }
 
         return WatchDecision(toStart: toStart.sorted(), toEnd: toEnd.sorted())
+    }
+
+    /// Whether a freshly-detected transcript at `cwd` should actually spawn: only if a
+    /// live `claude` process backs that directory, so an ended-but-still-fresh transcript
+    /// can't respawn. `nil` counts (probe unavailable) → allow (mtime-only behaviour).
+    public static func shouldSpawn(cwd: String, liveCWDCounts: [String: Int]?) -> Bool {
+        guard let counts = liveCWDCounts else { return true }
+        return (counts[cwd] ?? 0) > 0
     }
 }

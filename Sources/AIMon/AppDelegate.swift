@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.orderFrontRegardless()
         sessionWindows[session.sessionId] = window
         seedBySession[session.sessionId] = session.projectSeed
+        NSLog("AIMon: + spawn \(session.sessionId.prefix(8)) cwd=\(session.cwd) live=\(sessionWindows.count)")
     }
 
     private func handleSessionEnded(_ sessionId: String) {
@@ -54,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sessionWindows[sessionId]?.close()
         sessionWindows[sessionId] = nil
         seedBySession[sessionId] = nil
+        NSLog("AIMon: - despawn \(sessionId.prefix(8)) live=\(sessionWindows.count)")
     }
 
     // MARK: - Dev affordance

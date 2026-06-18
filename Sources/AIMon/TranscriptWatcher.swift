@@ -68,6 +68,7 @@ final class TranscriptWatcher {
         for id in decision.toStart {
             guard let url = urlBySession[id], let rawCwd = cwdFromFile(url) else { continue }
             let cwd = Self.standardize(rawCwd)
+            guard WatcherReconciler.shouldSpawn(cwd: cwd, liveCWDCounts: counts) else { continue }  // no live claude here
             tracked[id] = cwd
             onStarted?(StartedSession(sessionId: id, cwd: cwd, projectSeed: ProjectIdentity.seed(forCWD: cwd)))
         }
