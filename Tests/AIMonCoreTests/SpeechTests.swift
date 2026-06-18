@@ -12,7 +12,7 @@ final class SpeechTests: XCTestCase {
     }
 
     func test_templateLine_nonEmptyForEveryTriggerAndArchetype() {
-        let triggers: [SpeechTrigger] = [.sessionStarted, .sessionJoined(count: 2), .sessionLeft(count: 1)]
+        let triggers: [SpeechTrigger] = [.sessionStarted, .sessionJoined(count: 2), .sessionLeft(count: 1), .idleThought]
         for a in CompanionArchetype.allCases {
             for t in triggers {
                 XCTAssertFalse(TemplateSpeech.line(trigger: t, archetype: a).isEmpty, "\(a) \(t)")
@@ -51,6 +51,13 @@ final class SpeechTests: XCTestCase {
         XCTAssertTrue(p.contains("aimon"))
         XCTAssertTrue(p.contains("2"))
         XCTAssertTrue(p.lowercased().contains("no emoji"))
+    }
+
+    func test_prompt_idleThought_isInCharacter() {
+        let ctx = SpeechContext(archetype: .dramatic, trigger: .idleThought, projectName: "aimon", sessionCount: 1)
+        let p = SpeechPrompt.build(for: ctx)
+        XCTAssertTrue(p.contains("theatrical"))
+        XCTAssertTrue(p.lowercased().contains("thought"))
     }
 
     // MARK: - Cadence

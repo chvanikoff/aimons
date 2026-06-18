@@ -16,9 +16,10 @@ public enum PersonalityGenerator {
 /// Why the monster is speaking — derived from session lifecycle (richer transcript-activity
 /// triggers come later, once the per-session activity reader exists).
 public enum SpeechTrigger: Equatable, Sendable {
-    case sessionStarted             // the project's monster just appeared
+    case sessionStarted             // the project's monster just appeared (greeting)
     case sessionJoined(count: Int)  // another session opened in this project
     case sessionLeft(count: Int)    // a session closed, project still live
+    case idleThought                // an occasional random musing during a quiet stretch
 }
 
 /// Offline template lines — the always-available speech floor, keyed by (trigger, archetype).
@@ -35,6 +36,7 @@ public enum TemplateSpeech {
         case .sessionStarted: return started[archetype]!
         case .sessionJoined:  return joined[archetype]!
         case .sessionLeft:    return left[archetype]!
+        case .idleThought:    return idle[archetype]!
         }
     }
 
@@ -55,6 +57,12 @@ public enum TemplateSpeech {
         .grumpy:   ["Finally, one less to track.", "Good riddance."],
         .chill:    ["And then there was one. All good.", "A session wandered off. Whatever."],
         .dramatic: ["One falls! The quest continues!", "A session departs into the void..."],
+    ]
+    private static let idle: [CompanionArchetype: [String]] = [
+        .cheerful: ["I wonder what we'll build today!", "I love watching you work.", "Ooh, what does this part do?"],
+        .grumpy:   ["Still here. Still watching.", "Don't mind me, just judging the code.", "Are we there yet?"],
+        .chill:    ["Just vibing over here.", "Nice and quiet. I like it.", "No rush. Take your time."],
+        .dramatic: ["The silence... it's deafening!", "What twists await in this code?", "I sense a great refactor approaching."],
     ]
 }
 
@@ -102,6 +110,8 @@ public enum SpeechPrompt {
             return "your human opened another session in \"\(projectName)\" — there are now \(count) at once."
         case .sessionLeft(let count):
             return "a session in \"\(projectName)\" just closed — \(count) still running."
+        case .idleThought:
+            return "it's been quiet for a while in \"\(projectName)\"; share a brief, random thought to yourself while you watch."
         }
     }
 }

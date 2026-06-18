@@ -16,6 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var devCompanions: [CompanionWindow] = []
     private var aimonsVisible = true
     private let speechCooldown: TimeInterval = 4
+    private var nextIdleAt: [String: Date] = [:]   // cwd -> when the next idle thought is due
+    private var idleTimer: Timer?
+    private var didInitialApply = false            // suppress greetings for sessions already live at launch
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusItem.button(in: NSStatusBar.system)
@@ -40,10 +43,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         watcher.onOutcome = { [weak self] outcome in self?.apply(outcome) }
         watcher.start()
+
+        let idle = Timer(timeInterval: 20, repeats: true) { [weak self] _ in self?.tickIdle() }
+        idle.tolerance = 5
+        RunLoop.main.add(idle, forMode: .common)
+        idleTimer = idle
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         watcher.stop()
+        idleTimer?.invalidate()
         projectWindows.values.forEach { $0.retire() }
         projectWindows.removeAll()
         despawnDevMonsters()
@@ -52,12 +61,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Project-driven windows (one per directory)
 
     private func apply(_ outcome: WatchOutcome) {
-        for ref in outcome.started { spawn(ref) }
+        for ref in outcome.started { spawn(ref, greet: didInitialApply) }
         for ref in outcome.changed { updateSessionCount(ref) }
         for cwd in outcome.ended { despawn(cwd) }
+        didInitialApply = true   // sessions already live at launch don't greet; later ones do
     }
 
-    private func spawn(_ ref: ProjectRef) {
+    private func spawn(_ ref: ProjectRef, greet: Bool) {
         guard projectWindows[ref.cwd] == nil else { return }
         let window = CompanionWindow(seed: ref.seed, appearance: appearance)
         window.setSessionCount(ref.sessionCount, animated: false)
@@ -69,34 +79,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if aimonsVisible { window.orderFrontRegardless() }
         projectWindows[ref.cwd] = window
         sessionCountByCwd[ref.cwd] = ref.sessionCount
+        nextIdleAt[ref.cwd] = Date().addingTimeInterval(TimeInterval(Int.random(in: 90...180)))  // first one sooner
         Log.lifecycle.notice("+ spawn project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) live=\(projectWindows.count)")
+        if greet { speak(.sessionStarted, for: ref) }
     }
 
-    /// Session count changed for a live project — the monster reacts (pop) and speaks.
+    /// Session count changed for a live project — the monster pops and remarks on it.
     private func updateSessionCount(_ ref: ProjectRef) {
         let prev = sessionCountByCwd[ref.cwd] ?? ref.sessionCount
         sessionCountByCwd[ref.cwd] = ref.sessionCount
-        let window = projectWindows[ref.cwd]
-        window?.setSessionCount(ref.sessionCount, animated: aimonsVisible)
-        guard aimonsVisible else {
-            Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount)")
-            return
-        }
-        let now = Date()
-        guard SpeechCadence.shouldSpeak(lastSpoke: lastSpokeByCwd[ref.cwd], now: now, cooldown: speechCooldown) else {
-            Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) (cooldown)")
-            return
-        }
-        lastSpokeByCwd[ref.cwd] = now
-        let trigger: SpeechTrigger = ref.sessionCount > prev
-            ? .sessionJoined(count: ref.sessionCount)
-            : .sessionLeft(count: ref.sessionCount)
-        let context = SpeechContext(archetype: PersonalityGenerator.archetype(seed: ref.seed),
-                                    trigger: trigger,
-                                    projectName: projectName(ref.cwd),
-                                    sessionCount: ref.sessionCount)
-        speechEngine.speak(context) { [weak window] line in window?.showSpeech(line) }
-        Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) speak(\(context.archetype.rawValue))")
+        projectWindows[ref.cwd]?.setSessionCount(ref.sessionCount, animated: aimonsVisible)
+        Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount)")
+        speak(ref.sessionCount > prev ? .sessionJoined(count: ref.sessionCount) : .sessionLeft(count: ref.sessionCount),
+              for: ref)
     }
 
     private func despawn(_ cwd: String) {
@@ -105,8 +100,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         projectWindows[cwd] = nil
         sessionCountByCwd[cwd] = nil
         lastSpokeByCwd[cwd] = nil
+        nextIdleAt[cwd] = nil
         Log.lifecycle.notice("- despawn project \(projectLabel(cwd)) live=\(projectWindows.count)")
     }
+
+    // MARK: - Speech
+
+    /// Cadence-gated speech for a project: builds context, checks visibility + cooldown, then
+    /// presents the template floor and (async) the Ollama upgrade.
+    private func speak(_ trigger: SpeechTrigger, for ref: ProjectRef) {
+        guard aimonsVisible, let window = projectWindows[ref.cwd] else { return }
+        let now = Date()
+        guard SpeechCadence.shouldSpeak(lastSpoke: lastSpokeByCwd[ref.cwd], now: now, cooldown: speechCooldown) else { return }
+        lastSpokeByCwd[ref.cwd] = now
+        let context = SpeechContext(archetype: PersonalityGenerator.archetype(seed: ref.seed),
+                                    trigger: trigger, projectName: projectName(ref.cwd),
+                                    sessionCount: ref.sessionCount)
+        speechEngine.speak(context) { [weak window] line in window?.showSpeech(line) }
+        Log.lifecycle.notice("speak \(projectLabel(ref.cwd)) (\(context.archetype.rawValue))")
+    }
+
+    /// Occasional idle musings: when a project's monster has been quiet past its (randomized)
+    /// idle interval, it shares a thought. Cadence-gated and visible-only.
+    private func tickIdle() {
+        guard aimonsVisible else { return }
+        let now = Date()
+        for cwd in projectWindows.keys {
+            guard let due = nextIdleAt[cwd], now >= due else { continue }
+            nextIdleAt[cwd] = now.addingTimeInterval(randomIdleInterval())
+            let ref = ProjectRef(cwd: cwd, seed: ProjectIdentity.seed(forCWD: cwd),
+                                 sessionCount: sessionCountByCwd[cwd] ?? 1)
+            speak(.idleThought, for: ref)
+        }
+    }
+
+    private func randomIdleInterval() -> TimeInterval { TimeInterval(Int.random(in: 240...480)) }  // 4–8 min
 
     private func projectLabel(_ cwd: String) -> String {
         #if DEBUG
