@@ -18,6 +18,16 @@ public struct Personality: Codable, Equatable, Sendable {
         self.snark = snark
     }
 
+    /// A representative personality whose dominant trait matches an archetype (for tests / coarse use).
+    public static func representative(of archetype: CompanionArchetype) -> Personality {
+        switch archetype {
+        case .cheerful: return Personality(enthusiasm: 90, patience: 50, chaos: 40, wisdom: 40, snark: 20)
+        case .grumpy:   return Personality(enthusiasm: 30, patience: 40, chaos: 30, wisdom: 50, snark: 90)
+        case .chill:    return Personality(enthusiasm: 40, patience: 90, chaos: 20, wisdom: 80, snark: 30)
+        case .dramatic: return Personality(enthusiasm: 60, patience: 30, chaos: 90, wisdom: 40, snark: 40)
+        }
+    }
+
     /// A coarse archetype derived from the dominant trait — used to pick template lines.
     public var archetype: CompanionArchetype {
         let scored: [(CompanionArchetype, Int)] = [

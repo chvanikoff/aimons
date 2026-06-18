@@ -8,11 +8,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let watcher = TranscriptWatcher()
 
     private let speechEngine = SpeechEngine()
+    private let registry = AIMonRegistry()
 
     private var projectWindows: [String: CompanionWindow] = [:]   // cwd -> window (one monster per project)
     private var sessionCountByCwd: [String: Int] = [:]           // cwd -> last seen live session count
     private var lastSpokeByCwd: [String: Date] = [:]            // cwd -> last time the monster spoke (cadence)
-    private var lastFrameByCwd: [String: NSRect] = [:]            // per-project position memory (outlives sessions)
+    private var personalityByCwd: [String: Personality] = [:]    // cwd -> personality (from registry, cached)
     private var devCompanions: [CompanionWindow] = []
     private var aimonsVisible = true
     private let speechCooldown: TimeInterval = 4
@@ -65,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watcher.stop()
         idleTimer?.invalidate()
         activityTimer?.invalidate()
+        projectWindows.forEach { persistFrame($1, forCWD: $0) }   // remember positions across launches
         projectWindows.values.forEach { $0.retire() }
         projectWindows.removeAll()
         despawnDevMonsters()
@@ -81,10 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func spawn(_ ref: ProjectRef, greet: Bool) {
         guard projectWindows[ref.cwd] == nil else { return }
+        let aimon = registry.aimon(forProjectCWD: ref.cwd, now: Date())   // mint or load persistent identity
+        personalityByCwd[ref.cwd] = aimon.personality
+
         let window = CompanionWindow(seed: ref.seed, appearance: appearance)
         window.setSessionCount(ref.sessionCount, animated: false)
-        if let frame = lastFrameByCwd[ref.cwd] {
-            window.setFrame(frame, display: false)        // resume where this project's monster last sat
+        if let f = aimon.lastFrame {
+            window.setFrame(NSRect(x: f.x, y: f.y, width: f.width, height: f.height), display: false)
         } else {
             cascade(window, index: projectWindows.count)
         }
@@ -92,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         projectWindows[ref.cwd] = window
         sessionCountByCwd[ref.cwd] = ref.sessionCount
         nextIdleAt[ref.cwd] = Date().addingTimeInterval(TimeInterval(Int.random(in: 90...180)))  // first one sooner
-        Log.lifecycle.notice("+ spawn project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) live=\(projectWindows.count)")
+        Log.lifecycle.notice("+ spawn \(aimon.name) [\(aimon.rarity.rawValue)] in \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) live=\(projectWindows.count)")
         if greet { speak(.sessionStarted, for: ref) }
     }
 
@@ -107,13 +112,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func despawn(_ cwd: String) {
-        if let window = projectWindows[cwd] { lastFrameByCwd[cwd] = window.frame }
+        if let window = projectWindows[cwd] { persistFrame(window, forCWD: cwd) }
         projectWindows[cwd]?.retire()
         projectWindows[cwd] = nil
         sessionCountByCwd[cwd] = nil
         lastSpokeByCwd[cwd] = nil
+        personalityByCwd[cwd] = nil
         nextIdleAt[cwd] = nil
         Log.lifecycle.notice("- despawn project \(projectLabel(cwd)) live=\(projectWindows.count)")
+    }
+
+    private func persistFrame(_ window: CompanionWindow, forCWD cwd: String) {
+        let f = window.frame
+        registry.updateFrame(StoredFrame(x: Double(f.origin.x), y: Double(f.origin.y),
+                                         width: Double(f.size.width), height: Double(f.size.height)),
+                             forProjectCWD: cwd)
     }
 
     // MARK: - Speech
@@ -125,9 +138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let now = Date()
         guard SpeechCadence.shouldSpeak(lastSpoke: lastSpokeByCwd[ref.cwd], now: now, cooldown: speechCooldown) else { return }
         lastSpokeByCwd[ref.cwd] = now
-        let context = SpeechContext(archetype: PersonalityGenerator.archetype(seed: ref.seed),
-                                    trigger: trigger, projectName: projectName(ref.cwd),
-                                    sessionCount: ref.sessionCount)
+        let personality = personalityByCwd[ref.cwd] ?? PersonalityGenerator.personality(seed: ref.seed)
+        let context = SpeechContext(personality: personality, trigger: trigger,
+                                    projectName: projectName(ref.cwd), sessionCount: ref.sessionCount)
         speechEngine.speak(context) { [weak window] line in window?.showSpeech(line) }
         Log.lifecycle.notice("speak \(projectLabel(ref.cwd)) (\(context.archetype.rawValue))")
     }

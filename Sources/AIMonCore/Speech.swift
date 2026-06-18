@@ -74,16 +74,25 @@ public enum TemplateSpeech {
 
 /// Everything needed to compose a spoken line — personality + what just happened.
 public struct SpeechContext: Equatable, Sendable {
-    public let archetype: CompanionArchetype
+    public let personality: Personality
     public let trigger: SpeechTrigger
     public let projectName: String
     public let sessionCount: Int
 
-    public init(archetype: CompanionArchetype, trigger: SpeechTrigger, projectName: String, sessionCount: Int) {
-        self.archetype = archetype
+    /// Coarse archetype for template selection.
+    public var archetype: CompanionArchetype { personality.archetype }
+
+    public init(personality: Personality, trigger: SpeechTrigger, projectName: String, sessionCount: Int) {
+        self.personality = personality
         self.trigger = trigger
         self.projectName = projectName
         self.sessionCount = sessionCount
+    }
+
+    /// Convenience for tests / coarse callers.
+    public init(archetype: CompanionArchetype, trigger: SpeechTrigger, projectName: String, sessionCount: Int) {
+        self.init(personality: .representative(of: archetype), trigger: trigger,
+                  projectName: projectName, sessionCount: sessionCount)
     }
 }
 
@@ -92,20 +101,23 @@ public enum SpeechPrompt {
     public static func build(for ctx: SpeechContext) -> String {
         """
         You are a tiny pixel-art desktop monster living on a programmer's screen, watching their \
-        coding sessions. Your personality: \(persona(ctx.archetype)).
+        coding sessions. Your personality: \(persona(ctx.personality)).
         React to the event below in ONE short, in-character sentence (max 14 words). No emoji. \
         Do not mention file paths or secrets. Reply with only the sentence.
         Event: \(event(ctx.trigger, projectName: ctx.projectName))
         """
     }
 
-    static func persona(_ a: CompanionArchetype) -> String {
-        switch a {
-        case .cheerful: return "upbeat, warm, and encouraging"
-        case .grumpy:   return "grumpy and sarcastic, but secretly caring"
-        case .chill:    return "laid-back, calm, and unbothered"
-        case .dramatic: return "theatrical and gloriously over-the-top"
-        }
+    /// A natural-language persona from the strongest traits (so each monster sounds distinct).
+    static func persona(_ p: Personality) -> String {
+        var parts: [String] = []
+        if p.enthusiasm >= 65 { parts.append("bubbly and excitable") } else if p.enthusiasm <= 30 { parts.append("low-key and deadpan") }
+        if p.snark >= 65 { parts.append("very sarcastic") } else if p.snark <= 25 { parts.append("sweet and sincere") }
+        if p.patience <= 30 { parts.append("impatient") } else if p.patience >= 75 { parts.append("unflappably patient") }
+        if p.wisdom >= 70 { parts.append("wise and sage-like") }
+        if p.chaos >= 70 { parts.append("chaotic and unpredictable") }
+        if parts.isEmpty { parts.append("easy-going") }
+        return parts.joined(separator: ", ")
     }
 
     static func event(_ trigger: SpeechTrigger, projectName: String) -> String {

@@ -47,7 +47,7 @@ final class SpeechTests: XCTestCase {
     func test_prompt_includesPersonaAndEvent() {
         let ctx = SpeechContext(archetype: .grumpy, trigger: .sessionJoined(count: 2), projectName: "aimon", sessionCount: 2)
         let p = SpeechPrompt.build(for: ctx)
-        XCTAssertTrue(p.contains("grumpy"))
+        XCTAssertTrue(p.contains("sarcastic"))   // grumpy archetype → high-snark persona
         XCTAssertTrue(p.contains("aimon"))
         XCTAssertTrue(p.contains("2"))
         XCTAssertTrue(p.lowercased().contains("no emoji"))
@@ -56,7 +56,7 @@ final class SpeechTests: XCTestCase {
     func test_prompt_idleThought_isInCharacter() {
         let ctx = SpeechContext(archetype: .dramatic, trigger: .idleThought, projectName: "aimon", sessionCount: 1)
         let p = SpeechPrompt.build(for: ctx)
-        XCTAssertTrue(p.contains("theatrical"))
+        XCTAssertTrue(p.contains("chaotic"))   // dramatic archetype → high-chaos persona
         XCTAssertTrue(p.lowercased().contains("thought"))
     }
 
