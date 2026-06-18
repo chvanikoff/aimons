@@ -39,4 +39,25 @@ public enum ProcessScan {
         for cwd in cwds { result[cwd, default: 0] += 1 }
         return result
     }
+
+    /// Combines the two probe stages into a tri-state result:
+    ///   - `nil`  → probe unavailable; caller must degrade to the mtime heuristic.
+    ///   - `[]`   → no `claude` CLI running (a *trustworthy* empty: every session may end).
+    ///   - `[..]` → the live cwds.
+    ///
+    /// `claudePIDs == nil` means `ps` failed. `lsofExitOK == false` (or nil output) means
+    /// `lsof` errored. Crucially, if `lsof` returns FEWER cwds than pids — which happens when
+    /// a pid dies in the TOCTOU gap between the `ps` and `lsof` shell-outs, so lsof drops it
+    /// and exits non-zero — we return `nil` rather than a partial undercount that would
+    /// wrongly despawn a live session.
+    public static func resolveLiveCWDs(claudePIDs: [String]?,
+                                       lsofOutput: String?,
+                                       lsofExitOK: Bool) -> [String]? {
+        guard let pids = claudePIDs else { return nil }      // ps failed
+        if pids.isEmpty { return [] }                         // no claude running — trustworthy empty
+        guard lsofExitOK, let output = lsofOutput else { return nil }   // lsof failed
+        let resolved = cwds(fromLSOF: output)
+        guard resolved.count == pids.count else { return nil }          // undercount → unreliable
+        return resolved
+    }
 }
