@@ -1,7 +1,8 @@
 import SpriteKit
 import AIMonCore
 
-/// Renders a single monster sprite, pixel-crisp, centered, on a clear background.
+/// Renders a single monster sprite, pixel-crisp, centered, on a clear background,
+/// with a gentle idle bob so it feels alive.
 final class CompanionScene: SKScene {
     private let cgImage: CGImage
     private var sprite: SKSpriteNode?
@@ -27,6 +28,7 @@ final class CompanionScene: SKScene {
         layoutSprite(node, in: size)
         addChild(node)
         self.sprite = node
+        startIdleAnimation(on: node)
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -40,5 +42,14 @@ final class CompanionScene: SKScene {
         let tex = node.texture!.size()
         let scale = min(container.width / tex.width, container.height / tex.height)
         node.size = CGSize(width: tex.width * scale, height: tex.height * scale)
+    }
+
+    /// A slow, looping vertical bob centered on the resting position (net displacement zero).
+    private func startIdleAnimation(on node: SKSpriteNode) {
+        let up = SKAction.moveBy(x: 0, y: 3, duration: 0.7)
+        up.timingMode = .easeInEaseOut
+        let down = SKAction.moveBy(x: 0, y: -3, duration: 0.7)
+        down.timingMode = .easeInEaseOut
+        node.run(.repeatForever(.sequence([up, down])), withKey: "idle")
     }
 }
