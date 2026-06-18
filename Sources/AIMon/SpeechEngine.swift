@@ -1,24 +1,49 @@
 import Foundation
 import AIMonCore
 
-/// Decides what a monster says. Presents the always-available template line instantly (a snappy
-/// floor), then asynchronously upgrades it with an Ollama line if one arrives — the tiered
-/// "works without, better with" design (spec §8.1). `present` is always invoked on the main thread.
+/// Decides what a monster says, and presents exactly ONE line per speech (on the main thread):
+/// the Ollama line if it answers within a short deadline, otherwise the always-available template
+/// fallback. One bubble per event — no instant-placeholder-then-swap (that produced a jarring
+/// second bubble whenever the model answered after the first bubble had dismissed).
 final class SpeechEngine {
     private let ollama: OllamaProvider?
+    private let deadline: TimeInterval
 
-    init(ollama: OllamaProvider? = OllamaProvider()) {
+    init(ollama: OllamaProvider? = OllamaProvider(), deadline: TimeInterval = 4) {
         self.ollama = ollama
+        self.deadline = deadline
     }
 
     func speak(_ context: SpeechContext, present: @escaping (String) -> Void) {
-        present(TemplateSpeech.line(trigger: context.trigger, archetype: context.archetype,
-                                    variant: context.sessionCount))   // instant floor (on main)
-        guard let ollama else { return }
         Task {
-            guard let line = try? await ollama.line(for: context), !line.isEmpty else { return }
-            await MainActor.run { present(line) }                     // upgrade, swapped in
-            Log.lifecycle.debug("ollama line: \(line)")
+            let line = await resolveLine(for: context)
+            await MainActor.run { present(line) }
+        }
+    }
+
+    private func resolveLine(for context: SpeechContext) async -> String {
+        if let ollama, let llm = await firstWithinDeadline({ try? await ollama.line(for: context) }),
+           !llm.isEmpty {
+            Log.lifecycle.debug("ollama line: \(llm)")
+            return llm
+        }
+        return TemplateSpeech.line(trigger: context.trigger, archetype: context.archetype,
+                                   variant: context.sessionCount)
+    }
+
+    /// Run `work`, but give up (returning nil) once `deadline` passes — a late LLM reply is then
+    /// ignored rather than popping a second bubble.
+    private func firstWithinDeadline(_ work: @escaping () async -> String?) async -> String? {
+        let deadline = self.deadline
+        return await withTaskGroup(of: String?.self) { group in
+            group.addTask { await work() }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(deadline * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
         }
     }
 }

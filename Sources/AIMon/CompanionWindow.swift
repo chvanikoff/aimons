@@ -66,6 +66,7 @@ final class CompanionWindow: NSPanel {
     /// held use-after-frees (observed SIGSEGV). After this, dropping the dictionary reference
     /// lets ARC reclaim the window.
     func retire() {
+        if let bubble { removeChildWindow(bubble) }
         bubble?.dismiss()
         bubble?.orderOut(nil)
         skView.isPaused = true
@@ -79,12 +80,14 @@ final class CompanionWindow: NSPanel {
 
     private var bubble: SpeechBubbleWindow?
 
-    /// Render a speech bubble above the monster (cadence/anti-spam is governed by the caller).
-    /// Calling again before the bubble dismisses replaces the text — used to swap the instant
-    /// template floor for the upgraded Ollama line.
+    /// Render a speech bubble above the monster. The bubble is attached as a child window so it
+    /// follows the monster when dragged. (Cadence/anti-spam is governed by the caller.)
     func showSpeech(_ text: String) {
         if bubble == nil { bubble = SpeechBubbleWindow() }
-        bubble?.show(text, above: frame, duration: 6)
+        guard let bubble else { return }
+        removeChildWindow(bubble)                  // re-anchor cleanly above the current position
+        bubble.show(text, above: frame, duration: 6)
+        addChildWindow(bubble, ordered: .above)    // AppKit now keeps it pinned as the monster moves
     }
 
     /// Show/hide both the monster and its bubble (for the menubar visibility toggle).
