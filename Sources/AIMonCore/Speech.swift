@@ -20,6 +20,7 @@ public enum SpeechTrigger: Equatable, Sendable {
     case sessionJoined(count: Int)  // another session opened in this project
     case sessionLeft(count: Int)    // a session closed, project still live
     case idleThought                // an occasional random musing during a quiet stretch
+    case activity(SessionActivity)  // a reaction to what the AI is doing right now
 }
 
 /// Offline template lines — the always-available speech floor, keyed by (trigger, archetype).
@@ -37,6 +38,18 @@ public enum TemplateSpeech {
         case .sessionJoined:  return joined[archetype]!
         case .sessionLeft:    return left[archetype]!
         case .idleThought:    return idle[archetype]!
+        case .activity(let a): return activity(a)
+        }
+    }
+
+    // Activity floor lines are archetype-agnostic (personality flavor comes from the LLM tier).
+    static func activity(_ a: SessionActivity) -> [String] {
+        switch a {
+        case .editing:  return ["Tinkering with the code, I see.", "Editing away..."]
+        case .running:  return ["Running something — let's see.", "Off it goes!"]
+        case .testing:  return ["Running the tests — fingers crossed!", "Test time. Moment of truth."]
+        case .error:    return ["Uh oh, an error!", "Something broke. Yikes."]
+        case .waiting:  return ["Your turn!", "All quiet — over to you."]
         }
     }
 
@@ -112,6 +125,14 @@ public enum SpeechPrompt {
             return "a session in \"\(projectName)\" just closed — \(count) still running."
         case .idleThought:
             return "it's been quiet for a while in \"\(projectName)\"; share a brief, random thought to yourself while you watch."
+        case .activity(let a):
+            switch a {
+            case .editing(let file): return "your human is editing the file \"\(file)\" in \"\(projectName)\"."
+            case .running:           return "your human just ran a shell command in \"\(projectName)\"."
+            case .testing:           return "your human is running the tests in \"\(projectName)\"."
+            case .error:             return "an error just showed up in the output in \"\(projectName)\"."
+            case .waiting:           return "the AI finished its turn in \"\(projectName)\" — it's waiting for the human now."
+            }
         }
     }
 }

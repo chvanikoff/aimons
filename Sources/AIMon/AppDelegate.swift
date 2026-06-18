@@ -20,6 +20,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var idleTimer: Timer?
     private var didInitialApply = false            // suppress greetings for sessions already live at launch
 
+    private let activityReader = TranscriptActivityReader()
+    private let activityQueue = DispatchQueue(label: "io.romanc.aimon.activity", qos: .utility)
+    private var activityTimer: Timer?
+    private var activityProbing = false
+    private var lastActivityByCwd: [String: SessionActivity] = [:]   // speak only when it changes
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusItem.button(in: NSStatusBar.system)
         item.button?.title = "👾"
@@ -48,11 +54,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         idle.tolerance = 5
         RunLoop.main.add(idle, forMode: .common)
         idleTimer = idle
+
+        let activity = Timer(timeInterval: 3, repeats: true) { [weak self] _ in self?.tickActivity() }
+        activity.tolerance = 1
+        RunLoop.main.add(activity, forMode: .common)
+        activityTimer = activity
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         watcher.stop()
         idleTimer?.invalidate()
+        activityTimer?.invalidate()
         projectWindows.values.forEach { $0.retire() }
         projectWindows.removeAll()
         despawnDevMonsters()
@@ -135,6 +147,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func randomIdleInterval() -> TimeInterval { TimeInterval(Int.random(in: 240...480)) }  // 4–8 min
+
+    /// "Reads the work": tail each live project's transcript off-main and react to the genuinely
+    /// notable moments only — running tests and errors — when they newly occur. Editing/running/
+    /// waiting are detected but intentionally not spoken (too frequent → annoying).
+    private func tickActivity() {
+        guard aimonsVisible, !activityProbing else { return }
+        let cwds = Array(projectWindows.keys)
+        guard !cwds.isEmpty else { return }
+        activityProbing = true
+        let reader = activityReader
+        activityQueue.async { [weak self] in
+            var results: [String: SessionActivity] = [:]
+            for cwd in cwds { if let a = reader.activity(forCWD: cwd) { results[cwd] = a } }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.activityProbing = false
+                for (cwd, activity) in results {
+                    guard self.lastActivityByCwd[cwd] != activity else { continue }   // only on change
+                    self.lastActivityByCwd[cwd] = activity
+                    guard activity == .error || activity == .testing else { continue } // speak only on notable
+                    let ref = ProjectRef(cwd: cwd, seed: ProjectIdentity.seed(forCWD: cwd),
+                                         sessionCount: self.sessionCountByCwd[cwd] ?? 1)
+                    self.speak(.activity(activity), for: ref)
+                }
+            }
+        }
+    }
 
     private func projectLabel(_ cwd: String) -> String {
         #if DEBUG

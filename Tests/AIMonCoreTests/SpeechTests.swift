@@ -60,6 +60,17 @@ final class SpeechTests: XCTestCase {
         XCTAssertTrue(p.lowercased().contains("thought"))
     }
 
+    func test_activity_templatesNonEmptyAndPromptDescribesIt() {
+        let activities: [SessionActivity] = [.editing(file: "x.swift"), .running(command: "ls"), .testing, .error, .waiting]
+        for a in activities {
+            XCTAssertFalse(TemplateSpeech.line(trigger: .activity(a), archetype: .chill).isEmpty, "\(a)")
+        }
+        let p = SpeechPrompt.build(for: SpeechContext(archetype: .grumpy, trigger: .activity(.testing), projectName: "aimon", sessionCount: 1))
+        XCTAssertTrue(p.lowercased().contains("test"))
+        let pe = SpeechPrompt.build(for: SpeechContext(archetype: .grumpy, trigger: .activity(.editing(file: "auth.swift")), projectName: "aimon", sessionCount: 1))
+        XCTAssertTrue(pe.contains("auth.swift"))
+    }
+
     // MARK: - Cadence
 
     func test_cadence_allowsWhenNeverSpoken() {
