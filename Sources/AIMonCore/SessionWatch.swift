@@ -37,19 +37,20 @@ public struct WatchDecision: Equatable {
 public enum WatcherReconciler {
     /// Diffs transcript `files` and live-process info against `tracked` sessions.
     ///
-    /// Spawn and end use the *same* signal — a live `claude` process backing the
-    /// session's directory — so they can't fight and flap. `liveCWDCounts` maps a
-    /// cwd to how many live processes run there; `nil` means the probe was
-    /// unavailable, so we degrade to the mtime timeout.
+    /// The invariant: **the number of monsters for a directory equals the number of
+    /// live `claude` processes in it.** A process exposes only its cwd, not which
+    /// session it is, so when several transcripts share a directory we can't map a
+    /// process to a specific one — instead we keep the `P` most-recently-active
+    /// sessions there (P = live process count) and end the rest. This is idle-safe
+    /// (a lone live session is never stale-despawned) and flap-free (spawn obeys the
+    /// same count, so an ended-but-still-fresh transcript can't resurrect).
     ///
-    /// `toStart` here is only a *candidate* list (freshly written, untracked); the
-    /// watcher applies `shouldSpawn` once it has resolved each candidate's cwd,
-    /// since `TranscriptFile` doesn't carry one. Ending:
-    ///   - file vanished            → end
-    ///   - no live process for cwd  → end, and stays ended (freshness can't resurrect it)
-    ///   - any live process for cwd → keep (idle-safe; all same-dir twins persist
-    ///                                until the last process for that dir exits)
-    ///   - probe unavailable        → fall back to the mtime stale timeout
+    /// `liveCWDCounts` maps cwd → live process count; `nil` means the probe was
+    /// unavailable, so we degrade to the per-session mtime stale timeout.
+    ///
+    /// `toStart` is only a *candidate* list (freshly written, untracked); the watcher
+    /// applies `canSpawn` once it has resolved each candidate's cwd, since
+    /// `TranscriptFile` doesn't carry one.
     public static func reconcile(files: [TranscriptFile],
                                  tracked: [TrackedSession],
                                  liveCWDCounts: [String: Int]?,
@@ -67,23 +68,40 @@ public enum WatcherReconciler {
         }
 
         var toEnd: [String] = []
-        for t in tracked {
-            guard let f = byId[t.sessionId] else { toEnd.append(t.sessionId); continue }  // vanished
-            if let counts = liveCWDCounts {
-                if (counts[t.cwd] ?? 0) == 0 { toEnd.append(t.sessionId) }                // no live claude here
-            } else if SessionLiveness.isEnded(lastModified: f.lastModified, now: now, staleTimeout: staleTimeout) {
-                toEnd.append(t.sessionId)                                                  // probe down → mtime fallback
+        guard let counts = liveCWDCounts else {
+            for t in tracked {                                       // probe down → per-session mtime fallback
+                guard let f = byId[t.sessionId] else { toEnd.append(t.sessionId); continue }
+                if SessionLiveness.isEnded(lastModified: f.lastModified, now: now, staleTimeout: staleTimeout) {
+                    toEnd.append(t.sessionId)
+                }
+            }
+            return WatchDecision(toStart: toStart.sorted(), toEnd: toEnd.sorted())
+        }
+
+        var byCWD: [String: [TrackedSession]] = [:]
+        for t in tracked { byCWD[t.cwd, default: []].append(t) }
+        for (cwd, group) in byCWD {
+            var present: [(id: String, mtime: Date)] = []
+            for t in group {
+                if let f = byId[t.sessionId] { present.append((t.sessionId, f.lastModified)) }
+                else { toEnd.append(t.sessionId) }                  // file vanished → end unconditionally
+            }
+            let keep = counts[cwd] ?? 0                             // monsters here == live processes here
+            if present.count > keep {
+                let ranked = present.sorted { ($0.mtime, $0.id) < ($1.mtime, $1.id) }  // stalest first
+                for i in 0..<(present.count - keep) { toEnd.append(ranked[i].id) }
             }
         }
 
         return WatchDecision(toStart: toStart.sorted(), toEnd: toEnd.sorted())
     }
 
-    /// Whether a freshly-detected transcript at `cwd` should actually spawn: only if a
-    /// live `claude` process backs that directory, so an ended-but-still-fresh transcript
-    /// can't respawn. `nil` counts (probe unavailable) → allow (mtime-only behaviour).
-    public static func shouldSpawn(cwd: String, liveCWDCounts: [String: Int]?) -> Bool {
+    /// Whether a freshly-detected transcript at `cwd` should actually spawn: only if the
+    /// directory has an unfilled process slot (`trackedAtCwd < live processes there`), so
+    /// monster count never exceeds process count and an ended transcript can't respawn.
+    /// `nil` counts (probe unavailable) → allow (mtime-only behaviour).
+    public static func canSpawn(cwd: String, trackedAtCwd: Int, liveCWDCounts: [String: Int]?) -> Bool {
         guard let counts = liveCWDCounts else { return true }
-        return (counts[cwd] ?? 0) > 0
+        return trackedAtCwd < (counts[cwd] ?? 0)
     }
 }

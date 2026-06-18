@@ -68,7 +68,9 @@ final class TranscriptWatcher {
         for id in decision.toStart {
             guard let url = urlBySession[id], let rawCwd = cwdFromFile(url) else { continue }
             let cwd = Self.standardize(rawCwd)
-            guard WatcherReconciler.shouldSpawn(cwd: cwd, liveCWDCounts: counts) else { continue }  // no live claude here
+            let trackedAtCwd = tracked.values.filter { $0 == cwd }.count
+            guard WatcherReconciler.canSpawn(cwd: cwd, trackedAtCwd: trackedAtCwd, liveCWDCounts: counts)
+            else { continue }   // directory already has as many monsters as live processes
             tracked[id] = cwd
             onStarted?(StartedSession(sessionId: id, cwd: cwd, projectSeed: ProjectIdentity.seed(forCWD: cwd)))
         }

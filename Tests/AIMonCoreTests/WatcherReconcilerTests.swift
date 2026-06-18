@@ -55,18 +55,27 @@ final class WatcherReconcilerTests: XCTestCase {
         XCTAssertEqual(d.toEnd, ["gone"])
     }
 
-    // Same dir, N sessions: all persist while ANY process for that dir is alive,
-    // regardless of how stale any individual transcript is.
-    func test_sharedCwd_oneProcessGone_keepsBoth() {
+    // Count invariant: monsters for a dir == live processes there. Two transcripts,
+    // one process → keep the freshest, end the stalest (the duplicate-for-this-session bug).
+    func test_sharedCwd_moreTranscriptsThanProcesses_endsStalest() {
         let d = reconcile(
             files: [file("fresh", ageSeconds: 2), file("stale", ageSeconds: 200)],
             tracked: [TrackedSession(sessionId: "fresh", cwd: cwd),
                       TrackedSession(sessionId: "stale", cwd: cwd)],
             liveCWDCounts: [cwd: 1])
+        XCTAssertEqual(d.toEnd, ["stale"], "with 1 process for 2 transcripts, the stalest is dropped")
+    }
+
+    func test_sharedCwd_processPerTranscript_keepsAll() {
+        let d = reconcile(
+            files: [file("a", ageSeconds: 2), file("b", ageSeconds: 200)],
+            tracked: [TrackedSession(sessionId: "a", cwd: cwd),
+                      TrackedSession(sessionId: "b", cwd: cwd)],
+            liveCWDCounts: [cwd: 2])
         XCTAssertEqual(d.toEnd, [])
     }
 
-    func test_sharedCwd_allProcessesGone_endsBoth() {
+    func test_sharedCwd_allProcessesGone_endsAll() {
         let d = reconcile(
             files: [file("a", ageSeconds: 2), file("b", ageSeconds: 2)],
             tracked: [TrackedSession(sessionId: "a", cwd: cwd),
@@ -75,25 +84,30 @@ final class WatcherReconcilerTests: XCTestCase {
         XCTAssertEqual(d.toEnd, ["a", "b"])
     }
 
-    // MARK: - Spawn gate (the anti-flap rule)
+    // MARK: - Spawn gate (count-based, anti-flap)
 
-    func test_shouldSpawn_requiresLiveProcessAtCwd() {
-        XCTAssertTrue(WatcherReconciler.shouldSpawn(cwd: cwd, liveCWDCounts: [cwd: 1]))
-        XCTAssertFalse(WatcherReconciler.shouldSpawn(cwd: cwd, liveCWDCounts: [:]))
-        XCTAssertFalse(WatcherReconciler.shouldSpawn(cwd: cwd, liveCWDCounts: ["/elsewhere": 1]))
+    func test_canSpawn_allowsWhenDirHasAnUnfilledProcessSlot() {
+        XCTAssertTrue(WatcherReconciler.canSpawn(cwd: cwd, trackedAtCwd: 0, liveCWDCounts: [cwd: 1]))
+        XCTAssertTrue(WatcherReconciler.canSpawn(cwd: cwd, trackedAtCwd: 1, liveCWDCounts: [cwd: 2]))
     }
 
-    func test_shouldSpawn_allowsWhenProbeUnavailable() {
-        XCTAssertTrue(WatcherReconciler.shouldSpawn(cwd: cwd, liveCWDCounts: nil))
+    func test_canSpawn_refusesWhenDirIsAlreadyAtProcessCount() {
+        XCTAssertFalse(WatcherReconciler.canSpawn(cwd: cwd, trackedAtCwd: 1, liveCWDCounts: [cwd: 1]),
+                       "a 2nd transcript must not spawn when 1 process already has 1 monster")
+        XCTAssertFalse(WatcherReconciler.canSpawn(cwd: cwd, trackedAtCwd: 0, liveCWDCounts: [:]))
     }
 
-    // Regression for the flap: after Ctrl-C the process is gone but the transcript
-    // is still fresh. End fires AND re-spawn is refused — so it stays gone.
+    func test_canSpawn_allowsWhenProbeUnavailable() {
+        XCTAssertTrue(WatcherReconciler.canSpawn(cwd: cwd, trackedAtCwd: 5, liveCWDCounts: nil))
+    }
+
+    // Regression for the flap: after Ctrl-C the process is gone but the transcript is
+    // still fresh. End fires AND re-spawn is refused (0 slots) — so it stays gone.
     func test_endedSession_withFreshTranscriptButNoProcess_doesNotRespawn() {
         let d = reconcile(files: [file("s1", ageSeconds: 1)],
                           tracked: [TrackedSession(sessionId: "s1", cwd: cwd)], liveCWDCounts: [:])
         XCTAssertEqual(d.toEnd, ["s1"], "no process → end even though fresh")
-        XCTAssertFalse(WatcherReconciler.shouldSpawn(cwd: cwd, liveCWDCounts: [:]),
+        XCTAssertFalse(WatcherReconciler.canSpawn(cwd: cwd, trackedAtCwd: 0, liveCWDCounts: [:]),
                        "and the freshness must not respawn it")
     }
 
