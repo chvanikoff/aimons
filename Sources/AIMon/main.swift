@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import AIMonCore
 
 // Hidden dev mode: `AIMon --speech-test` exercises the real Ollama speech path once and exits,
@@ -81,6 +82,38 @@ if CommandLine.arguments.contains("--render-test") {
         try? data.write(to: URL(fileURLWithPath: "\(dir)/sheet.png"))
         print("wrote \(dir)/sheet.png")
     }
+    exit(0)
+}
+
+// Hidden dev mode: `AIMon --stable-test` renders the Stable gallery to a PNG for eyeballing.
+if CommandLine.arguments.contains("--stable-test") {
+    let appearance = ProceduralAppearance()
+    let cwds = ["/Users/roman/Projects/aimon", "/Users/roman/Projects/web", "/Users/roman/work/api",
+                "/tmp/scratch", "/Users/roman/Projects/game-engine", "/Users/roman/zeta"]
+    let entries = cwds.enumerated().map { i, cwd -> StableEntry in
+        let seed = ProjectIdentity.seed(forCWD: cwd)
+        let aimon = AIMon(id: UUID(), seed: seed, name: NameGenerator.name(seed: seed),
+                          personality: PersonalityGenerator.personality(seed: seed),
+                          rarity: RarityGenerator.rarity(seed: seed), projectCWD: cwd,
+                          createdAt: Date(timeIntervalSince1970: 1_700_000_000), lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000))
+        return StableEntry(aimon: aimon, image: appearance.image(for: seed).nsImage(), isActive: i == 0)
+    }
+    let dir = "/tmp/aimon-render"; try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    let ok = MainActor.assumeIsolated { () -> Bool in
+        // ImageRenderer can't lay out ScrollView/LazyVGrid content, so render the cards eagerly
+        // (2 columns) just for this screenshot; the live window uses the real scrolling StableView.
+        let eager = HStack(alignment: .top, spacing: 16) {
+            VStack(spacing: 16) { ForEach(Array(entries.prefix(3))) { AIMonCard(entry: $0) } }
+            VStack(spacing: 16) { ForEach(Array(entries.dropFirst(3).prefix(3))) { AIMonCard(entry: $0) } }
+        }.padding().frame(width: 460).background(Color(nsColor: .windowBackgroundColor))
+        let renderer = ImageRenderer(content: eager)
+        renderer.proposedSize = ProposedViewSize(width: 460, height: nil)
+        guard let img = renderer.nsImage, let tiff = img.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) else { return false }
+        try? png.write(to: URL(fileURLWithPath: "\(dir)/stable.png"))
+        return true
+    }
+    print(ok ? "wrote \(dir)/stable.png" : "stable render failed")
     exit(0)
 }
 

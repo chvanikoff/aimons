@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         visItem.state = .on
         menu.addItem(visItem)
         self.visibilityItem = visItem
+        menu.addItem(NSMenuItem(title: "Open the Stable…", action: #selector(openStable), keyEquivalent: "s"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Spawn random monster (dev)",
                                 action: #selector(spawnDevMonster), keyEquivalent: "n"))
@@ -202,6 +203,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func projectName(_ cwd: String) -> String {
         let name = (cwd as NSString).lastPathComponent
         return name.isEmpty ? "this project" : name
+    }
+
+    // MARK: - The Stable
+
+    private var stableWindow: StableWindow?
+
+    @objc private func openStable() {
+        let active = Set(projectWindows.keys)
+        let entries = registry.all().map { aimon in
+            StableEntry(aimon: aimon,
+                        image: appearance.image(for: aimon.seed).nsImage(),
+                        isActive: active.contains(aimon.projectCWD))
+        }
+        let window = StableWindow(entries: entries)
+        stableWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     // MARK: - Visibility toggle
