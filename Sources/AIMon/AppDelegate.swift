@@ -3,8 +3,11 @@ import AIMonCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private var companions: [CompanionWindow] = []
     private let appearance: AppearanceProvider = ProceduralAppearance()
+    private let watcher = TranscriptWatcher()
+
+    private var sessionWindows: [String: CompanionWindow] = [:]   // sessionId -> window
+    private var devCompanions: [CompanionWindow] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusItem.button(in: NSStatusBar.system)
@@ -13,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "AIMon (preview)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Spawn random monster (dev)",
-                                action: #selector(spawnMonster),
+                                action: #selector(spawnDevMonster),
                                 keyEquivalent: "n"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit",
@@ -22,24 +25,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.menu = menu
         self.statusItem = item
 
-        spawnMonster()
+        watcher.onStarted = { [weak self] session in self?.handleSessionStarted(session) }
+        watcher.onEnded = { [weak self] sessionId in self?.handleSessionEnded(sessionId) }
+        watcher.start()
     }
 
-    /// Adds a new monster without disturbing existing ones (a dev/demo affordance and a
-    /// preview of the eventual one-AIMon-per-session behaviour).
-    @objc private func spawnMonster() {
-        let seed: UInt64 = companions.isEmpty ? 42 : UInt64.random(in: 0..<UInt64.max)
-        let window = CompanionWindow(seed: seed, appearance: appearance)
+    // MARK: - Session-driven windows
 
-        // Cascade so stacked spawns don't perfectly overlap.
-        let step = CGFloat(companions.count % 6) * 40
+    private func handleSessionStarted(_ session: TranscriptWatcher.StartedSession) {
+        guard sessionWindows[session.sessionId] == nil else { return }
+        let window = CompanionWindow(seed: session.projectSeed, appearance: appearance)
+        cascade(window, index: sessionWindows.count)
+        window.orderFrontRegardless()
+        sessionWindows[session.sessionId] = window
+    }
+
+    private func handleSessionEnded(_ sessionId: String) {
+        sessionWindows[sessionId]?.close()
+        sessionWindows[sessionId] = nil
+    }
+
+    // MARK: - Dev affordance
+
+    @objc private func spawnDevMonster() {
+        let seed = UInt64.random(in: 0..<UInt64.max)
+        let window = CompanionWindow(seed: seed, appearance: appearance)
+        cascade(window, index: devCompanions.count)
+        window.orderFrontRegardless()
+        devCompanions.append(window)
+    }
+
+    private func cascade(_ window: CompanionWindow, index: Int) {
+        let step = CGFloat(index % 6) * 40
         var origin = window.frame.origin
         origin.x += step
         origin.y -= step
         window.setFrameOrigin(origin)
-
-        window.orderFrontRegardless()
-        companions.append(window)
     }
 }
 
