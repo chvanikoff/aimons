@@ -1,21 +1,28 @@
 import SpriteKit
 import AIMonCore
 
-/// Renders a single monster sprite, pixel-crisp, centered, on a clear background,
-/// with a gentle idle bob so it feels alive.
+/// Renders one monster sprite, pixel-crisp, with life: a gentle idle (bob + breathing), periodic
+/// blinking (eyes-closed frame swap), and brief flourishes when it reacts or speaks.
+///
+/// Animation channels are kept independent so they never fight: position via additive `moveBy`
+/// (bob/talk/react compose cleanly), scale reserved for breathing only. The sprite is fit to ~82%
+/// of the window so movement has headroom and never clips.
 final class CompanionScene: SKScene {
-    private let cgImage: CGImage?
+    private let openCG: CGImage?
+    private let closedCG: CGImage?
     private let renderConfig: RenderConfig
     private var sprite: SKSpriteNode?
+    private var openTexture: SKTexture?
+    private let fitFraction: CGFloat = 0.82
 
-    init(image: PixelImage, size: CGSize, renderConfig: RenderConfig = .default) {
-        self.cgImage = image.makeCGImage()
+    init(image: PixelImage, closedEyesImage: PixelImage?, size: CGSize, renderConfig: RenderConfig = .default) {
+        self.openCG = image.makeCGImage()
+        self.closedCG = closedEyesImage?.makeCGImage()
         self.renderConfig = renderConfig
         super.init(size: size)
-        self.scaleMode = .resizeFill
-        self.backgroundColor = .clear
-        if cgImage == nil {
-            // One bad sprite must never crash the whole multi-monster app; render empty.
+        scaleMode = .resizeFill
+        backgroundColor = .clear
+        if openCG == nil {
             Log.lifecycle.error("CompanionScene: could not build CGImage; rendering empty")
         }
     }
@@ -26,15 +33,17 @@ final class CompanionScene: SKScene {
     deinit { Log.lifecycle.debug("CompanionScene released") }
 
     override func didMove(to view: SKView) {
-        guard let cgImage else { return }
-        let texture = SKTexture(cgImage: cgImage)
-        texture.filteringMode = .nearest   // crisp pixels, no blur
+        guard let openCG else { return }
+        let texture = SKTexture(cgImage: openCG)
+        texture.filteringMode = .nearest
+        openTexture = texture
         let node = SKSpriteNode(texture: texture)
         node.position = CGPoint(x: size.width / 2, y: size.height / 2)
         layoutSprite(node, in: size)
         addChild(node)
-        self.sprite = node
-        startIdleAnimation(on: node)
+        sprite = node
+        startIdle(on: node)
+        startBlinking(on: node)
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -43,31 +52,59 @@ final class CompanionScene: SKScene {
         layoutSprite(sprite, in: size)
     }
 
-    /// Scales the sprite to fit the scene while preserving aspect ratio and crisp pixels.
     private func layoutSprite(_ node: SKSpriteNode, in container: CGSize) {
-        let tex = node.texture!.size()
-        let scale = min(container.width / tex.width, container.height / tex.height)
-        node.size = CGSize(width: tex.width * scale, height: tex.height * scale)
+        guard let tex = node.texture else { return }
+        let t = tex.size()
+        let scale = min(container.width / t.width, container.height / t.height) * fitFraction
+        node.size = CGSize(width: t.width * scale, height: t.height * scale)
     }
 
-    /// A brief excited reaction (a quick scale pop) — e.g. when another session joins the project.
+    // MARK: - Idle: bob (position) + breathe (scale) + blink (texture)
+
+    private func startIdle(on node: SKSpriteNode) {
+        let a = renderConfig.bobAmplitude
+        let d = renderConfig.bobDuration
+        let up = SKAction.moveBy(x: 0, y: a, duration: d); up.timingMode = .easeInEaseOut
+        let down = SKAction.moveBy(x: 0, y: -a, duration: d); down.timingMode = .easeInEaseOut
+        node.run(.repeatForever(.sequence([up, down])), withKey: "bob")
+
+        let inhale = SKAction.scaleX(to: 0.97, y: 1.05, duration: d); inhale.timingMode = .easeInEaseOut
+        let exhale = SKAction.scaleX(to: 1.0, y: 1.0, duration: d); exhale.timingMode = .easeInEaseOut
+        node.run(.repeatForever(.sequence([inhale, exhale])), withKey: "breathe")
+    }
+
+    private func startBlinking(on node: SKSpriteNode) {
+        guard let openTexture, let closedCG else { return }
+        let closed = SKTexture(cgImage: closedCG)
+        closed.filteringMode = .nearest
+        let blink = SKAction.sequence([
+            SKAction.wait(forDuration: 4.5, withRange: 4.0),   // every ~2.5–6.5s, varied
+            SKAction.setTexture(closed, resize: false),
+            SKAction.wait(forDuration: 0.13),
+            SKAction.setTexture(openTexture, resize: false),
+        ])
+        node.run(.repeatForever(blink), withKey: "blink")
+    }
+
+    // MARK: - Flourishes (additive position hops; compose with the bob, no scale conflict)
+
+    /// An excited little jump — e.g. when another session joins.
     func reactExcited() {
         guard let sprite else { return }
-        let up = SKAction.scale(to: 1.25, duration: 0.12)
-        up.timingMode = .easeOut
-        let down = SKAction.scale(to: 1.0, duration: 0.18)
-        down.timingMode = .easeIn
-        sprite.run(.sequence([up, down]), withKey: "react")
+        let jump = SKAction.sequence([
+            SKAction.moveBy(x: 0, y: 8, duration: 0.12),
+            SKAction.moveBy(x: 0, y: -8, duration: 0.16),
+        ])
+        sprite.run(jump, withKey: "react")
     }
 
-    /// A slow, looping vertical bob centered on the resting position (net displacement zero).
-    private func startIdleAnimation(on node: SKSpriteNode) {
-        let amplitude = renderConfig.bobAmplitude
-        let duration = renderConfig.bobDuration
-        let up = SKAction.moveBy(x: 0, y: amplitude, duration: duration)
-        up.timingMode = .easeInEaseOut
-        let down = SKAction.moveBy(x: 0, y: -amplitude, duration: duration)
-        down.timingMode = .easeInEaseOut
-        node.run(.repeatForever(.sequence([up, down])), withKey: "idle")
+    /// A brief double-hop while speaking, so a bubble feels "said".
+    func reactTalk() {
+        guard let sprite else { return }
+        let hop = SKAction.sequence([
+            SKAction.moveBy(x: 0, y: 4, duration: 0.09),
+            SKAction.moveBy(x: 0, y: -4, duration: 0.11),
+        ])
+        sprite.run(.repeat(hop, count: 2), withKey: "talk")
     }
 }

@@ -44,7 +44,8 @@ final class CompanionWindow: NSPanel {
             self?.scaleBy(factor, about: anchor)
         }
 
-        let scene = CompanionScene(image: image, size: initial)
+        let closedEyes = appearance.image(for: seed, eyesClosed: true)
+        let scene = CompanionScene(image: image, closedEyesImage: closedEyes, size: initial)
         skView.presentScene(scene)
         contentView = skView
 
@@ -88,6 +89,7 @@ final class CompanionWindow: NSPanel {
         removeChildWindow(bubble)                  // re-anchor cleanly above the current position
         bubble.show(text, above: frame, duration: 6)
         addChildWindow(bubble, ordered: .above)    // AppKit now keeps it pinned as the monster moves
+        (skView.scene as? CompanionScene)?.reactTalk()
     }
 
     /// Show/hide both the monster and its bubble (for the menubar visibility toggle).

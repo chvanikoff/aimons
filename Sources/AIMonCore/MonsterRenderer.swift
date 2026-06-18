@@ -8,33 +8,44 @@ public struct PixelImage: Equatable {
 public enum MonsterRenderer {
     public typealias RGB = (UInt8, UInt8, UInt8)
 
-    public static func pixels(grid: MonsterGrid, traits: MonsterTraits) -> PixelImage {
+    public static func pixels(grid: MonsterGrid, traits: MonsterTraits, eyesClosed: Bool = false) -> PixelImage {
         let w = grid.width
         let h = grid.height
         var rgba = [UInt8](repeating: 0, count: w * h * 4)
 
         let body = hslToRGB(h: traits.hue, s: traits.saturation, l: 0.55)
-        let dark = hslToRGB(h: traits.hue, s: traits.saturation, l: 0.38)
-        let eye: RGB = traits.eyeIsLight ? (255, 255, 255) : (26, 26, 26)
+        let dark = hslToRGB(h: traits.hue, s: traits.saturation, l: 0.36)   // edge / shading
+        let light = hslToRGB(h: traits.hue, s: traits.saturation, l: 0.72)  // lit-from-above highlight
+        let eye: RGB = traits.eyeIsLight ? (245, 245, 245) : (28, 28, 28)
 
         func put(_ x: Int, _ y: Int, _ c: RGB) {
             let i = (y * w + x) * 4
             rgba[i] = c.0; rgba[i + 1] = c.1; rgba[i + 2] = c.2; rgba[i + 3] = 255
         }
 
+        // Topmost filled cell per column → highlight, for a subtle sense of volume.
+        var topY = [Int](repeating: -1, count: w)
+        for x in 0..<w {
+            for y in 0..<h where grid.at(x, y) { topY[x] = y; break }
+        }
+
         for y in 0..<h {
             for x in 0..<w where grid.at(x, y) {
                 let isEdge = (y == h - 1 || x == 0 || x == w - 1)
-                put(x, y, isEdge ? dark : body)
+                if isEdge { put(x, y, dark) }
+                else if y == topY[x] { put(x, y, light) }
+                else { put(x, y, body) }
             }
         }
 
-        // Eyes on row 2, one cell in from each side, only if the body is present there.
+        // Eyes on row 2, one cell in from each side, only where the body is present.
+        // Closed eyes are drawn in the dark shade (a sleepy dash) for the blink frame.
         let eyeRow = 2
         let eyeInset = 1
+        let eyeColor = eyesClosed ? dark : eye
         if eyeRow < h {
-            if grid.at(eyeInset, eyeRow) { put(eyeInset, eyeRow, eye) }
-            if grid.at(w - 1 - eyeInset, eyeRow) { put(w - 1 - eyeInset, eyeRow, eye) }
+            if grid.at(eyeInset, eyeRow) { put(eyeInset, eyeRow, eyeColor) }
+            if grid.at(w - 1 - eyeInset, eyeRow) { put(w - 1 - eyeInset, eyeRow, eyeColor) }
         }
 
         return PixelImage(width: w, height: h, rgba: rgba)

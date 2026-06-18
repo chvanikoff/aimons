@@ -42,6 +42,48 @@ if CommandLine.arguments.contains("--identity-test") {
     exit(0)
 }
 
+// Hidden dev mode: `AIMon --render-test` writes a contact sheet of generated monsters to
+// /tmp/aimon-render/sheet.png so the procedural graphics can be eyeballed without the GUI.
+if CommandLine.arguments.contains("--render-test") {
+    func scaledCGImage(_ img: PixelImage, scale: Int) -> CGImage? {
+        guard let cg = img.makeCGImage() else { return nil }
+        let w = img.width * scale, h = img.height * scale
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .none
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+
+    let appearance = ProceduralAppearance()
+    let cwds = ["/Users/roman/Projects/aimon", "/Users/roman/Projects/web", "/Users/roman/work/api",
+                "/tmp/scratch", "/Users/roman/Projects/game-engine", "/Users/roman/dotfiles",
+                "/Users/roman/Projects/ml", "/Users/roman/side", "/Users/roman/cli",
+                "/Users/roman/zeta", "/Users/roman/omega", "/Users/roman/delta"]
+    let scale = 14, pad = 14, cols = 4
+    let images = cwds.map { appearance.image(for: ProjectIdentity.seed(forCWD: $0)) }
+        + [appearance.image(for: ProjectIdentity.seed(forCWD: cwds[0]), eyesClosed: true)]   // a blink frame
+    let cell = 7 * scale + pad
+    let rows = (images.count + cols - 1) / cols
+    let sheetW = cols * cell + pad, sheetH = rows * cell + pad
+    let ctx = CGContext(data: nil, width: sheetW, height: sheetH, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(CGColor(red: 0.5, green: 0.5, blue: 0.55, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: sheetW, height: sheetH))
+    ctx.interpolationQuality = .none
+    for (i, img) in images.enumerated() {
+        guard let cg = scaledCGImage(img, scale: scale) else { continue }
+        let col = i % cols, row = i / cols
+        ctx.draw(cg, in: CGRect(x: col * cell + pad, y: sheetH - (row + 1) * cell, width: 7 * scale, height: 7 * scale))
+    }
+    let dir = "/tmp/aimon-render"; try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    if let sheet = ctx.makeImage(), let data = NSBitmapImageRep(cgImage: sheet).representation(using: .png, properties: [:]) {
+        try? data.write(to: URL(fileURLWithPath: "\(dir)/sheet.png"))
+        print("wrote \(dir)/sheet.png")
+    }
+    exit(0)
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
