@@ -965,15 +965,15 @@ import AIMonCore
 /// A small, borderless, transparent, always-on-top window holding one monster.
 final class CompanionWindow: NSPanel {
     private let skView: CompanionSKView
-    private let minSize: CGSize
-    private let maxSize: CGSize
+    private let minBound: CGSize
+    private let maxBound: CGSize
 
     init(seed: UInt64, appearance: AppearanceProvider, pixelScale: CGFloat = 16) {
         let image = appearance.image(for: seed)
         let initial = CGSize(width: CGFloat(image.width) * pixelScale,
                              height: CGFloat(image.height) * pixelScale)
-        self.minSize = CGSize(width: initial.width * 0.5, height: initial.height * 0.5)
-        self.maxSize = CGSize(width: initial.width * 3.0, height: initial.height * 3.0)
+        self.minBound = CGSize(width: initial.width * 0.5, height: initial.height * 0.5)
+        self.maxBound = CGSize(width: initial.width * 3.0, height: initial.height * 3.0)
 
         self.skView = CompanionSKView(frame: NSRect(origin: .zero, size: initial))
         skView.allowsTransparency = true
@@ -1014,8 +1014,8 @@ final class CompanionWindow: NSPanel {
     private func scaleBy(_ factor: CGFloat) {
         var newW = frame.width * factor
         var newH = frame.height * factor
-        newW = max(minSize.width, min(maxSize.width, newW))
-        newH = max(minSize.height, min(maxSize.height, newH))
+        newW = max(minBound.width, min(maxBound.width, newW))
+        newH = max(minBound.height, min(maxBound.height, newH))
         let center = NSPoint(x: frame.midX, y: frame.midY)
         let newFrame = NSRect(x: center.x - newW / 2, y: center.y - newH / 2,
                               width: newW, height: newH)
