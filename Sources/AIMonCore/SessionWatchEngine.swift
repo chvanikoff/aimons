@@ -1,137 +1,112 @@
 import Foundation
 
-/// A live session as the watcher understands it: stable id, the directory it runs in,
-/// and the appearance seed derived from that directory. This is the minimal, forward-
-/// compatible "started" payload — the seed of the richer SessionEvent stream M4 will add.
-public struct SessionRef: Equatable, Sendable {
-    public let sessionId: String
+/// A live project as the watcher understands it: the directory, its appearance seed, and how
+/// many `claude` sessions are currently live in it. One monster represents one project; the
+/// session count is context the monster can react to (e.g. "a second session just opened here").
+public struct ProjectRef: Equatable, Sendable {
     public let cwd: String
     public let seed: UInt64
+    public let sessionCount: Int
 
-    public init(sessionId: String, cwd: String, seed: UInt64) {
-        self.sessionId = sessionId
+    public init(cwd: String, seed: UInt64, sessionCount: Int) {
         self.cwd = cwd
         self.seed = seed
+        self.sessionCount = sessionCount
     }
 }
 
-/// The delta a single watcher step produces: sessions that just appeared and ids that ended.
+/// The delta a single watcher step produces.
 public struct WatchOutcome: Equatable, Sendable {
-    public let started: [SessionRef]
-    public let ended: [String]
+    public let started: [ProjectRef]   // projects that just became live
+    public let ended: [String]         // cwds of projects no longer live
+    public let changed: [ProjectRef]   // live projects whose session count changed
 
-    public init(started: [SessionRef], ended: [String]) {
+    public init(started: [ProjectRef], ended: [String], changed: [ProjectRef]) {
         self.started = started
         self.ended = ended
+        self.changed = changed
     }
 
-    public static let empty = WatchOutcome(started: [], ended: [])
+    public static let empty = WatchOutcome(started: [], ended: [], changed: [])
+    public var isEmpty: Bool { started.isEmpty && ended.isEmpty && changed.isEmpty }
 }
 
 /// The stateful brain of session tracking, pure given its `step` arguments.
 ///
-/// One unified rule replaces the old spawn-candidate + canSpawn split that bred the
-/// signal-asymmetry bugs: **the monsters for a directory are the `P` most-recently-
-/// modified transcripts there, where `P` is the live `claude` process count for that
-/// directory.** Spawn and end are two sides of the same membership decision, so they
-/// cannot disagree (no idle false-despawn, no Ctrl-C flap, no duplicate sibling, and a
-/// resumed/idle session with a free process slot spawns even though its mtime is stale).
+/// **Model: one monster per directory.** A directory is live while ≥1 `claude` process runs
+/// in it; the monster appears on the first session and despawns when the last one closes. The
+/// per-directory session count comes straight from the process probe (each live `claude`
+/// process's cwd), so there is no ambiguity about "which session" — a problem macOS makes
+/// unsolvable, since a process exposes its cwd but not its transcript id.
 ///
-/// When the probe is unavailable (`liveCWDs == nil`) it degrades to the mtime heuristic:
-/// spawn fresh untracked transcripts, end tracked ones gone stale.
+/// When the probe is unavailable (`liveCWDs == nil`) it degrades to transcript mtime: a
+/// directory is live if it has a recently-written transcript, and ends once all of its
+/// transcripts are stale.
 public final class SessionWatchEngine {
     private let config: WatcherConfig
-    private var trackedById: [String: SessionRef] = [:]
+    private var tracked: [String: Int] = [:]   // cwd -> live session count
 
     public init(config: WatcherConfig = .default) {
         self.config = config
     }
 
-    /// Currently-tracked sessions (order unspecified).
-    public var tracked: [SessionRef] { Array(trackedById.values) }
-    public func isTracking(_ sessionId: String) -> Bool { trackedById[sessionId] != nil }
+    public var trackedCWDs: [String] { Array(tracked.keys) }
+    public func sessionCount(forCWD cwd: String) -> Int? { tracked[cwd] }
 
-    /// Advance one tick. `liveCWDs` are standardized cwds of live `claude` processes
-    /// (with multiplicity), or nil if the probe failed. `now` is used only on the
+    /// Advance one tick. `liveCWDs` are standardized cwds of live `claude` processes (with
+    /// multiplicity), or nil if the probe failed. `now` and `files` are used only on the
     /// probe-down fallback path. Mutates internal tracking; returns the delta.
     @discardableResult
     public func step(files: [TranscriptFile], liveCWDs: [String]?, now: Date) -> WatchOutcome {
-        let filesById = Dictionary(files.map { ($0.sessionId, $0) }, uniquingKeysWith: { a, _ in a })
-        let outcome = liveCWDs.map { decideProcessAware(files: files, filesById: filesById, liveCWDs: $0) }
-            ?? decideMtimeFallback(files: files, filesById: filesById, now: now)
-        for id in outcome.ended { trackedById[id] = nil }
-        for ref in outcome.started { trackedById[ref.sessionId] = ref }
-        return outcome
+        let live = liveCWDs.map(Self.tally) ?? fallbackLiveCounts(files: files, now: now)
+        return reconcile(live)
     }
 
-    // MARK: - Decisions (pure; no mutation of trackedById here)
+    // MARK: - Internals
 
-    private func decideProcessAware(files: [TranscriptFile],
-                                    filesById: [String: TranscriptFile],
-                                    liveCWDs: [String]) -> WatchOutcome {
+    private static func tally(_ cwds: [String]) -> [String: Int] {
         var counts: [String: Int] = [:]
-        for cwd in liveCWDs { counts[cwd, default: 0] += 1 }
-
-        let trackedIds = Set(trackedById.keys)
-        var byCWD: [String: [(id: String, mtime: Date, tracked: Bool)]] = [:]
-        var ended: [String] = []
-
-        // Tracked sessions group under their KNOWN cwd; a vanished file ends immediately.
-        for (id, ref) in trackedById {
-            if let f = filesById[id] {
-                byCWD[ref.cwd, default: []].append((id, f.lastModified, true))
-            } else {
-                ended.append(id)
-            }
-        }
-        // Untracked files join only if their cwd is resolvable.
-        for f in files where !trackedIds.contains(f.sessionId) {
-            guard let cwd = f.cwd else { continue }
-            byCWD[cwd, default: []].append((f.sessionId, f.lastModified, false))
-        }
-
-        var started: [SessionRef] = []
-        for (cwd, members) in byCWD {
-            let keep = counts[cwd] ?? 0
-            let ranked = members.sorted { a, b in
-                a.mtime != b.mtime ? a.mtime > b.mtime : a.id < b.id   // freshest first, id tiebreak
-            }
-            let keptIds = Set(ranked.prefix(keep).map(\.id))
-            for m in members {
-                if m.tracked {
-                    if !keptIds.contains(m.id) { ended.append(m.id) }       // evicted
-                } else if keptIds.contains(m.id) {
-                    started.append(SessionRef(sessionId: m.id, cwd: cwd,
-                                              seed: ProjectIdentity.seed(forCWD: cwd)))
-                }
-            }
-        }
-        return WatchOutcome(started: started.sorted { $0.sessionId < $1.sessionId }, ended: ended.sorted())
+        for cwd in cwds { counts[cwd, default: 0] += 1 }
+        return counts
     }
 
-    private func decideMtimeFallback(files: [TranscriptFile],
-                                     filesById: [String: TranscriptFile],
-                                     now: Date) -> WatchOutcome {
-        let trackedIds = Set(trackedById.keys)
-        var started: [SessionRef] = []
-        var ended: [String] = []
+    /// Probe-down fallback. A `nil` probe means "couldn't verify the live set", NOT "everything
+    /// ended" — so it must be **non-destructive**: keep every currently-tracked project exactly
+    /// as-is (no despawns, no count changes), and only *add* a newly-fresh transcript's directory
+    /// as a new project. A genuine end is recognized later, when an available probe affirmatively
+    /// omits the cwd. This is what prevents idle projects from flap-despawning during the brief
+    /// `ps`/`lsof` undercounts that happen under rapid process churn.
+    private func fallbackLiveCounts(files: [TranscriptFile], now: Date) -> [String: Int] {
+        var live = tracked   // keep all tracked projects untouched
+        var freshCount: [String: Int] = [:]
+        for f in files {
+            guard let cwd = f.cwd,
+                  SessionLiveness.isLive(lastModified: f.lastModified, now: now, liveWindow: config.liveWindow)
+            else { continue }
+            freshCount[cwd, default: 0] += 1
+        }
+        for (cwd, count) in freshCount where live[cwd] == nil {
+            live[cwd] = count   // a brand-new session can still appear during a probe outage
+        }
+        return live
+    }
 
-        for f in files where !trackedIds.contains(f.sessionId) {
-            guard let cwd = f.cwd else { continue }
-            if SessionLiveness.isLive(lastModified: f.lastModified, now: now, liveWindow: config.liveWindow) {
-                started.append(SessionRef(sessionId: f.sessionId, cwd: cwd,
-                                          seed: ProjectIdentity.seed(forCWD: cwd)))
-            }
-        }
-        for id in trackedById.keys {
-            if let f = filesById[id] {
-                if SessionLiveness.isEnded(lastModified: f.lastModified, now: now, staleTimeout: config.staleTimeout) {
-                    ended.append(id)
-                }
+    private func reconcile(_ live: [String: Int]) -> WatchOutcome {
+        var started: [ProjectRef] = []
+        var changed: [ProjectRef] = []
+        for (cwd, count) in live {
+            let ref = ProjectRef(cwd: cwd, seed: ProjectIdentity.seed(forCWD: cwd), sessionCount: count)
+            if let prev = tracked[cwd] {
+                if prev != count { changed.append(ref) }
             } else {
-                ended.append(id)
+                started.append(ref)
             }
         }
-        return WatchOutcome(started: started.sorted { $0.sessionId < $1.sessionId }, ended: ended.sorted())
+        let ended = tracked.keys.filter { live[$0] == nil }
+
+        tracked = live
+        return WatchOutcome(started: started.sorted { $0.cwd < $1.cwd },
+                            ended: ended.sorted(),
+                            changed: changed.sorted { $0.cwd < $1.cwd })
     }
 }

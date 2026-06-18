@@ -73,6 +73,19 @@ final class CompanionWindow: NSPanel {
         orderOut(nil)
     }
 
+    // MARK: - Session count (context the monster reacts to)
+
+    private var sessionCount = 1
+
+    /// Update how many live sessions this project has. On an increase (a new session joined),
+    /// the monster gives a brief reaction. `animated` is false for the initial spawn and while
+    /// hidden. (M4 will layer speech onto this same signal.)
+    func setSessionCount(_ count: Int, animated: Bool) {
+        let increased = count > sessionCount
+        sessionCount = count
+        if animated && increased { (skView.scene as? CompanionScene)?.reactExcited() }
+    }
+
     // MARK: - Keep the monster on screen
 
     /// Applied by AppKit during managed moves/resizes.

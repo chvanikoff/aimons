@@ -3,13 +3,14 @@ import AIMonCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
+    private var visibilityItem: NSMenuItem?
     private let appearance: AppearanceProvider = ProceduralAppearance()
     private let watcher = TranscriptWatcher()
 
-    private var sessionWindows: [String: CompanionWindow] = [:]   // sessionId -> window
-    private var seedBySession: [String: UInt64] = [:]             // sessionId -> project seed
-    private var lastFrameBySeed: [UInt64: NSRect] = [:]           // per-project position memory (outlives sessions)
+    private var projectWindows: [String: CompanionWindow] = [:]   // cwd -> window (one monster per project)
+    private var lastFrameByCwd: [String: NSRect] = [:]            // per-project position memory (outlives sessions)
     private var devCompanions: [CompanionWindow] = []
+    private var aimonsVisible = true
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusItem.button(in: NSStatusBar.system)
@@ -17,6 +18,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "AIMon (preview)", action: nil, keyEquivalent: ""))
+        let visItem = NSMenuItem(title: "Show AIMons", action: #selector(toggleVisibility), keyEquivalent: "")
+        visItem.state = .on
+        menu.addItem(visItem)
+        self.visibilityItem = visItem
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Spawn random monster (dev)",
                                 action: #selector(spawnDevMonster), keyEquivalent: "n"))
         menu.addItem(NSMenuItem(title: "Despawn dev monsters",
@@ -33,44 +39,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         watcher.stop()
-        sessionWindows.values.forEach { $0.retire() }
-        sessionWindows.removeAll()
+        projectWindows.values.forEach { $0.retire() }
+        projectWindows.removeAll()
         despawnDevMonsters()
     }
 
-    // MARK: - Session-driven windows
+    // MARK: - Project-driven windows (one per directory)
 
     private func apply(_ outcome: WatchOutcome) {
         for ref in outcome.started { spawn(ref) }
-        for id in outcome.ended { despawn(id) }
+        for ref in outcome.changed { updateSessionCount(ref) }
+        for cwd in outcome.ended { despawn(cwd) }
     }
 
-    private func spawn(_ ref: SessionRef) {
-        guard sessionWindows[ref.sessionId] == nil else { return }
+    private func spawn(_ ref: ProjectRef) {
+        guard projectWindows[ref.cwd] == nil else { return }
         let window = CompanionWindow(seed: ref.seed, appearance: appearance)
-        if let frame = lastFrameBySeed[ref.seed] {
+        window.setSessionCount(ref.sessionCount, animated: false)
+        if let frame = lastFrameByCwd[ref.cwd] {
             window.setFrame(frame, display: false)        // resume where this project's monster last sat
         } else {
-            cascade(window, index: sessionWindows.count)
+            cascade(window, index: projectWindows.count)
         }
-        window.orderFrontRegardless()
-        sessionWindows[ref.sessionId] = window
-        seedBySession[ref.sessionId] = ref.seed
+        if aimonsVisible { window.orderFrontRegardless() }
+        projectWindows[ref.cwd] = window
+        Log.lifecycle.notice("+ spawn project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) live=\(projectWindows.count)")
+    }
+
+    /// Session count changed for a live project — the monster reacts (and M4 speech can use it).
+    private func updateSessionCount(_ ref: ProjectRef) {
+        projectWindows[ref.cwd]?.setSessionCount(ref.sessionCount, animated: aimonsVisible)
+        Log.lifecycle.notice("~ project \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount)")
+    }
+
+    private func despawn(_ cwd: String) {
+        if let window = projectWindows[cwd] { lastFrameByCwd[cwd] = window.frame }
+        projectWindows[cwd]?.retire()
+        projectWindows[cwd] = nil
+        Log.lifecycle.notice("- despawn project \(projectLabel(cwd)) live=\(projectWindows.count)")
+    }
+
+    private func projectLabel(_ cwd: String) -> String {
         #if DEBUG
-        Log.lifecycle.notice("+ spawn \(ref.sessionId.prefix(8)) cwd=\(ref.cwd) live=\(sessionWindows.count)")
+        return cwd
         #else
-        Log.lifecycle.notice("+ spawn \(ref.sessionId.prefix(8)) live=\(sessionWindows.count)")
+        return (cwd as NSString).lastPathComponent
         #endif
     }
 
-    private func despawn(_ sessionId: String) {
-        if let window = sessionWindows[sessionId], let seed = seedBySession[sessionId] {
-            lastFrameBySeed[seed] = window.frame
+    // MARK: - Visibility toggle
+
+    @objc private func toggleVisibility() {
+        aimonsVisible.toggle()
+        visibilityItem?.state = aimonsVisible ? .on : .off
+        let windows = projectWindows.values + devCompanions
+        if aimonsVisible {
+            windows.forEach { $0.orderFrontRegardless() }
+        } else {
+            windows.forEach { $0.orderOut(nil) }   // hide only; the watcher keeps running
         }
-        sessionWindows[sessionId]?.retire()
-        sessionWindows[sessionId] = nil
-        seedBySession[sessionId] = nil
-        Log.lifecycle.notice("- despawn \(sessionId.prefix(8)) live=\(sessionWindows.count)")
+        Log.lifecycle.notice("aimons \(aimonsVisible ? "visible" : "hidden")")
     }
 
     // MARK: - Dev affordance
@@ -79,12 +107,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let seed = UInt64.random(in: 0..<UInt64.max)
         let window = CompanionWindow(seed: seed, appearance: appearance)
         cascade(window, index: devCompanions.count)
-        window.orderFrontRegardless()
+        if aimonsVisible { window.orderFrontRegardless() }
         devCompanions.append(window)
     }
 
     @objc private func despawnDevMonsters() {
-        devCompanions.forEach { $0.close() }
+        devCompanions.forEach { $0.retire() }
         devCompanions.removeAll()
     }
 

@@ -50,6 +50,16 @@ final class CompanionScene: SKScene {
         node.size = CGSize(width: tex.width * scale, height: tex.height * scale)
     }
 
+    /// A brief excited reaction (a quick scale pop) — e.g. when another session joins the project.
+    func reactExcited() {
+        guard let sprite else { return }
+        let up = SKAction.scale(to: 1.25, duration: 0.12)
+        up.timingMode = .easeOut
+        let down = SKAction.scale(to: 1.0, duration: 0.18)
+        down.timingMode = .easeIn
+        sprite.run(.sequence([up, down]), withKey: "react")
+    }
+
     /// A slow, looping vertical bob centered on the resting position (net displacement zero).
     private func startIdleAnimation(on node: SKSpriteNode) {
         let amplitude = renderConfig.bobAmplitude

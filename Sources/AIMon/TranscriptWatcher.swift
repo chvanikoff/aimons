@@ -81,8 +81,8 @@ final class TranscriptWatcher {
                 }
                 let outcome = self.engine.step(files: files, liveCWDs: live, now: now)
                 let liveDesc = live == nil ? "down" : String(live!.count)
-                Log.watcher.debug("tick files=\(files.count) live=\(liveDesc) started=\(outcome.started.count) ended=\(outcome.ended.count)")
-                if !outcome.started.isEmpty || !outcome.ended.isEmpty {
+                Log.watcher.debug("tick files=\(files.count) live=\(liveDesc) started=\(outcome.started.count) ended=\(outcome.ended.count) changed=\(outcome.changed.count)")
+                if !outcome.isEmpty {
                     self.onOutcome?(outcome)
                 }
             }
