@@ -310,7 +310,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if settingsStore.settings.selectedModel == nil { settingsStore.update { $0.selectedModel = rec.model } }
                 return
             }
-            if let other = installed.first {   // some usable model already present — just adopt it
+            // Adopt an existing chat-capable model (skip embedding-only ones that can't generate).
+            if let other = installed.first(where: OllamaService.looksLikeChatModel) {
                 if settingsStore.settings.selectedModel == nil { settingsStore.update { $0.selectedModel = other } }
                 return
             }

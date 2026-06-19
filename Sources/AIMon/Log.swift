@@ -61,8 +61,11 @@ enum Log {
 private final class LogFile {
     static let shared = LogFile()
     let url: URL
+    private let maxBytes = 2_000_000
     private let queue = DispatchQueue(label: "io.romanc.aimon.logfile", qos: .utility)
     private var handle: FileHandle?
+    private var bytesWritten = 0
+    private var disabled = false
     private let formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f
     }()
@@ -76,21 +79,36 @@ private final class LogFile {
 
     func append(_ category: String, _ level: String, _ message: String) {
         queue.async {
+            guard !self.disabled else { return }
             if self.handle == nil { self.open() }
-            let line = "\(self.formatter.string(from: Date())) [\(level)] \(category): \(message)\n"
-            self.handle?.write(Data(line.utf8))
+            guard let handle = self.handle else { return }
+            let data = Data("\(self.formatter.string(from: Date())) [\(level)] \(category): \(message)\n".utf8)
+            handle.write(data)
+            self.bytesWritten += data.count
+            if self.bytesWritten > self.maxBytes { self.rotate() }   // keep rotating mid-session
         }
     }
 
     private func open() {
         let fm = FileManager.default
         try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        // Rotate if it's gotten large, so the file never grows unbounded.
-        if let size = (try? fm.attributesOfItem(atPath: url.path)[.size]) as? Int, size > 2_000_000 {
-            try? fm.removeItem(at: url)
-        }
         if !fm.fileExists(atPath: url.path) { fm.createFile(atPath: url.path, contents: nil) }
-        handle = try? FileHandle(forWritingTo: url)
-        handle?.seekToEndOfFile()
+        guard let h = try? FileHandle(forWritingTo: url) else { disabled = true; return }
+        handle = h
+        h.seekToEndOfFile()
+        if let attrs = try? fm.attributesOfItem(atPath: url.path), let size = attrs[.size] as? Int {
+            bytesWritten = size
+        } else {
+            bytesWritten = 0
+        }
+    }
+
+    /// Close, delete, and reopen fresh — so the file never grows unbounded and we don't keep a
+    /// handle on a deleted inode.
+    private func rotate() {
+        try? handle?.close()
+        handle = nil
+        bytesWritten = 0
+        try? FileManager.default.removeItem(at: url)   // reopened lazily on the next append
     }
 }

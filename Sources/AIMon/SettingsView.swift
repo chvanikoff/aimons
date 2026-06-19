@@ -47,9 +47,12 @@ final class SettingsViewModel: ObservableObject {
         if await service.isRunning() {
             installedModels = await service.installedModels()
             status = .running
-            // Keep a valid selection: prefer the recommended model, else the first installed.
+            // Keep a valid selection: prefer the recommended model, else the first chat-capable one
+            // (skip embedding-only models that can't generate speech).
             if selectedModel == nil || !installedModels.contains(selectedModel!) {
-                selectModel(installedModels.contains(recommendation.model) ? recommendation.model : installedModels.first)
+                selectModel(installedModels.contains(recommendation.model)
+                            ? recommendation.model
+                            : installedModels.first(where: OllamaService.looksLikeChatModel))
             }
         } else {
             installedModels = []

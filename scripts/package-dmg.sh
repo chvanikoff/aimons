@@ -7,6 +7,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Never leave a mounted RW volume behind if a later step fails.
+cleanup() { [ -n "${MNT:-}" ] && hdiutil detach "$MNT" -force >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
 APP_NAME="AIMon"
 BUNDLE_ID="io.romanc.aimon"
 VERSION="$(sed -n 's/.*version = "\(.*\)".*/\1/p' Sources/AIMonCore/Version.swift)"

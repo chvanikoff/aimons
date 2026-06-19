@@ -25,17 +25,22 @@ public struct AppSettings: Codable, Equatable, Sendable {
 }
 
 /// Loads/saves `AppSettings` to disk (best-effort; defaults if missing or unreadable).
+///
+/// Thread-safe: `settings` is read from the main thread (Settings UI, launch check) AND off-main
+/// (the speech Task resolving which model to use), while writes come from the main thread. A lock
+/// guards the storage so reads return a consistent value-type snapshot and never race a write.
 public final class SettingsStore {
     private let fileURL: URL
-    public private(set) var settings: AppSettings
+    private let lock = NSLock()
+    private var _settings: AppSettings
 
     public init(fileURL: URL = SettingsStore.defaultFileURL()) {
         self.fileURL = fileURL
         if let data = try? Data(contentsOf: fileURL),
            let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) {
-            self.settings = decoded
+            self._settings = decoded
         } else {
-            self.settings = AppSettings()
+            self._settings = AppSettings()
         }
     }
 
@@ -46,19 +51,28 @@ public final class SettingsStore {
         return support.appendingPathComponent("AIMon", isDirectory: true).appendingPathComponent("settings.json")
     }
 
-    /// Mutate and persist.
-    @discardableResult
-    public func update(_ mutate: (inout AppSettings) -> Void) -> AppSettings {
-        mutate(&settings)
-        save()
-        return settings
+    /// A consistent snapshot of the current settings (safe to read from any thread).
+    public var settings: AppSettings {
+        lock.lock(); defer { lock.unlock() }
+        return _settings
     }
 
-    private func save() {
+    /// Mutate and persist (atomically with respect to readers).
+    @discardableResult
+    public func update(_ mutate: (inout AppSettings) -> Void) -> AppSettings {
+        lock.lock()
+        mutate(&_settings)
+        let snapshot = _settings
+        lock.unlock()
+        save(snapshot)
+        return snapshot
+    }
+
+    private func save(_ snapshot: AppSettings) {
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
-            try JSONEncoder().encode(settings).write(to: fileURL, options: .atomic)
+            try JSONEncoder().encode(snapshot).write(to: fileURL, options: .atomic)
         } catch { /* non-fatal; in-memory state stays correct */ }
     }
 }
