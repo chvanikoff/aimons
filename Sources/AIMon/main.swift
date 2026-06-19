@@ -90,35 +90,46 @@ if CommandLine.arguments.contains("--render-test") {
     exit(0)
 }
 
-// Hidden dev mode: `AIMon --stable-test` renders the Stable gallery to a PNG for eyeballing.
+// Hidden dev mode: `AIMon --stable-test` renders the Stable cards (one per rarity, varied stages)
+// and a detail view to PNGs for eyeballing the rarity styling (#7) and detail/backstory (#8).
 if CommandLine.arguments.contains("--stable-test") {
     let appearance = ProceduralAppearance()
-    let cwds = ["/Users/roman/Projects/aimon", "/Users/roman/Projects/web", "/Users/roman/work/api",
-                "/tmp/scratch", "/Users/roman/Projects/game-engine", "/Users/roman/zeta"]
-    let entries = cwds.enumerated().map { i, cwd -> StableEntry in
-        let seed = ProjectIdentity.seed(forCWD: cwd)
+    let created = Date(timeIntervalSince1970: 1_700_000_000)
+    // One creature per rarity, with escalating xp so stage (and its look) also varies.
+    let entries = Rarity.allCases.enumerated().map { i, rarity -> StableEntry in
+        let seed = ProjectIdentity.seed(forCWD: "/demo/\(rarity.rawValue)")
+        let xp = i * 6   // 0,6,12,18,24,30 → spans stages 1→3
         let aimon = AIMon(id: UUID(), seed: seed, name: NameGenerator.name(seed: seed),
                           personality: PersonalityGenerator.personality(seed: seed),
-                          rarity: RarityGenerator.rarity(seed: seed), projectCWD: cwd,
-                          createdAt: Date(timeIntervalSince1970: 1_700_000_000), lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000))
-        return StableEntry(aimon: aimon, image: appearance.image(for: seed).nsImage(), isActive: i == 0)
+                          rarity: rarity, projectCWD: "/demo/\(rarity.rawValue)",
+                          createdAt: created, lastSeenAt: created, xp: xp)
+        let img = appearance.image(for: seed, rarity: rarity, stage: aimon.stage).nsImage()
+        return StableEntry(aimon: aimon, image: img, isActive: i == 0)
     }
     let dir = "/tmp/aimon-render"; try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
     let ok = MainActor.assumeIsolated { () -> Bool in
-        // ImageRenderer can't lay out ScrollView/LazyVGrid content, so render the cards eagerly
-        // (2 columns) just for this screenshot; the live window uses the real scrolling StableView.
-        let eager = HStack(alignment: .top, spacing: 16) {
+        // ImageRenderer can't lay out ScrollView/LazyVGrid, so render the cards eagerly (2 cols).
+        let cards = HStack(alignment: .top, spacing: 16) {
             VStack(spacing: 16) { ForEach(Array(entries.prefix(3))) { AIMonCard(entry: $0) } }
             VStack(spacing: 16) { ForEach(Array(entries.dropFirst(3).prefix(3))) { AIMonCard(entry: $0) } }
-        }.padding().frame(width: 460).background(Color(nsColor: .windowBackgroundColor))
-        let renderer = ImageRenderer(content: eager)
-        renderer.proposedSize = ProposedViewSize(width: 460, height: nil)
-        guard let img = renderer.nsImage, let tiff = img.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) else { return false }
-        try? png.write(to: URL(fileURLWithPath: "\(dir)/stable.png"))
+        }.padding(24).background(Color(nsColor: .windowBackgroundColor))
+        let cardsRenderer = ImageRenderer(content: cards)
+        cardsRenderer.proposedSize = ProposedViewSize(width: 480, height: nil)
+        let detail = AIMonDetailContent(entry: entries.last!)
+            .frame(width: 400).background(Color(nsColor: .windowBackgroundColor))
+        let detailRenderer = ImageRenderer(content: detail)
+        detailRenderer.proposedSize = ProposedViewSize(width: 400, height: nil)
+        guard let cImg = cardsRenderer.nsImage, let cTiff = cImg.tiffRepresentation,
+              let cRep = NSBitmapImageRep(data: cTiff), let cPng = cRep.representation(using: .png, properties: [:]),
+              let dImg = detailRenderer.nsImage, let dTiff = dImg.tiffRepresentation,
+              let dRep = NSBitmapImageRep(data: dTiff), let dPng = dRep.representation(using: .png, properties: [:])
+        else { return false }
+        try? cPng.write(to: URL(fileURLWithPath: "\(dir)/stable.png"))
+        try? dPng.write(to: URL(fileURLWithPath: "\(dir)/detail.png"))
         return true
     }
-    print(ok ? "wrote \(dir)/stable.png" : "stable render failed")
+    print(ok ? "wrote \(dir)/stable.png and detail.png" : "stable render failed")
     exit(0)
 }
 

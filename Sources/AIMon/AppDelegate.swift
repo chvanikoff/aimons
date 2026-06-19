@@ -14,10 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var projectWindows: [String: CompanionWindow] = [:]   // cwd -> window (one monster per project)
     private var sessionCountByCwd: [String: Int] = [:]           // cwd -> last seen live session count
     private var lastSpokeByCwd: [String: Date] = [:]            // cwd -> last time the monster spoke (cadence)
-    private var personalityByCwd: [String: Personality] = [:]    // cwd -> personality (from registry, cached)
+    private var aimonByCwd: [String: AIMon] = [:]                // cwd -> resident AIMon (cached from registry)
     private var devCompanions: [CompanionWindow] = []
     private var aimonsVisible = true
     private let speechCooldown: TimeInterval = 4
+    private let newSessionXP = 3     // experience gained when a genuinely new session begins
+    private let activityXP = 1       // experience per notable change while working
     private var nextIdleAt: [String: Date] = [:]   // cwd -> when the next idle thought is due
     private var idleTimer: Timer?
     private var didInitialApply = false            // suppress greetings for sessions already live at launch
@@ -44,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: #selector(spawnDevMonster), keyEquivalent: "n"))
         menu.addItem(NSMenuItem(title: "Despawn dev monsters",
                                 action: #selector(despawnDevMonsters), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Grant XP to active AIMons (dev)",
+                                action: #selector(grantDevXP), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -85,23 +89,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func spawn(_ ref: ProjectRef, greet: Bool) {
         guard projectWindows[ref.cwd] == nil else { return }
-        let aimon = registry.aimon(forProjectCWD: ref.cwd, now: Date())   // mint or load persistent identity
-        personalityByCwd[ref.cwd] = aimon.personality
+        let now = Date()
+        let base = registry.aimon(forProjectCWD: ref.cwd, now: now)   // mint or load persistent identity
+        // Only a genuinely new session earns xp — relaunching the app shouldn't farm evolution.
+        let evo = greet ? registry.addXP(newSessionXP, forProjectCWD: ref.cwd, now: now) : nil
+        let aimon = evo?.aimon ?? base
+        aimonByCwd[ref.cwd] = aimon
 
-        let window = CompanionWindow(seed: ref.seed, appearance: appearance)
+        let (open, closed) = appearanceImages(for: aimon)
+        let window = CompanionWindow(image: open, closedEyesImage: closed, name: aimon.name)
         window.setSessionCount(ref.sessionCount, animated: false)
         if let f = aimon.lastFrame {
             window.setFrame(NSRect(x: f.x, y: f.y, width: f.width, height: f.height), display: false)
         } else {
             cascade(window, index: projectWindows.count)
         }
-        window.onClick = { [weak self] in self?.focuser.focus(projectCWD: ref.cwd) }
+        window.onDoubleClick = { [weak self] in self?.focuser.focus(projectCWD: ref.cwd) }
         if aimonsVisible { window.orderFrontRegardless() }
         projectWindows[ref.cwd] = window
         sessionCountByCwd[ref.cwd] = ref.sessionCount
-        nextIdleAt[ref.cwd] = Date().addingTimeInterval(TimeInterval(Int.random(in: 90...180)))  // first one sooner
-        Log.lifecycle.notice("+ spawn \(aimon.name) [\(aimon.rarity.rawValue)] in \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) live=\(projectWindows.count)")
+        nextIdleAt[ref.cwd] = now.addingTimeInterval(TimeInterval(Int.random(in: 90...180)))  // first one sooner
+        Log.lifecycle.notice("+ spawn \(aimon.name) [\(aimon.rarity.rawValue)] stage=\(aimon.stage) xp=\(aimon.xp) in \(projectLabel(ref.cwd)) sessions=\(ref.sessionCount) live=\(projectWindows.count)")
         if greet { speak(.sessionStarted, for: ref) }
+        if evo?.didEvolve == true { announceEvolution(cwd: ref.cwd, toStage: evo!.toStage) }
+    }
+
+    /// Open + closed-eye images for a creature at its current rarity and evolution stage.
+    private func appearanceImages(for aimon: AIMon) -> (PixelImage, PixelImage) {
+        (appearance.image(for: aimon.seed, rarity: aimon.rarity, stage: aimon.stage),
+         appearance.image(for: aimon.seed, rarity: aimon.rarity, stage: aimon.stage, eyesClosed: true))
     }
 
     /// Session count changed for a live project — the monster pops and remarks on it.
@@ -120,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         projectWindows[cwd] = nil
         sessionCountByCwd[cwd] = nil
         lastSpokeByCwd[cwd] = nil
-        personalityByCwd[cwd] = nil
+        aimonByCwd[cwd] = nil
         nextIdleAt[cwd] = nil
         Log.lifecycle.notice("- despawn project \(projectLabel(cwd)) live=\(projectWindows.count)")
     }
@@ -132,6 +148,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                              forProjectCWD: cwd)
     }
 
+    // MARK: - Experience & evolution
+
+    /// Grant experience to a live project's AIMon; on a stage-up, re-render its look and announce it.
+    private func grantXP(_ amount: Int, to cwd: String) {
+        guard let result = registry.addXP(amount, forProjectCWD: cwd, now: Date()) else { return }
+        aimonByCwd[cwd] = result.aimon
+        guard result.didEvolve else { return }
+        if let window = projectWindows[cwd] {
+            let (open, closed) = appearanceImages(for: result.aimon)
+            window.updateAppearance(image: open, closedEyesImage: closed)
+        }
+        Log.lifecycle.notice("✦ evolved \(result.aimon.name) \(result.fromStage)→\(result.toStage) in \(projectLabel(cwd))")
+        announceEvolution(cwd: cwd, toStage: result.toStage)
+    }
+
+    /// A celebratory hop + bubble when a creature evolves (bypasses the speech cooldown — it's an
+    /// event worth always marking). The fresh look is applied by the caller.
+    private func announceEvolution(cwd: String, toStage: Int) {
+        guard let window = projectWindows[cwd] else { return }
+        window.celebrate()
+        guard aimonsVisible else { return }
+        window.showSpeech("✨ I evolved! Stage \(toStage)/\(Evolution.maxStage)")
+        lastSpokeByCwd[cwd] = Date()
+    }
+
     // MARK: - Speech
 
     /// Cadence-gated speech for a project: builds context, checks visibility + cooldown, then
@@ -141,7 +182,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let now = Date()
         guard SpeechCadence.shouldSpeak(lastSpoke: lastSpokeByCwd[ref.cwd], now: now, cooldown: speechCooldown) else { return }
         lastSpokeByCwd[ref.cwd] = now
-        let personality = personalityByCwd[ref.cwd] ?? PersonalityGenerator.personality(seed: ref.seed)
+        let personality = aimonByCwd[ref.cwd]?.effectivePersonality
+            ?? PersonalityGenerator.personality(seed: ref.seed)
         let context = SpeechContext(personality: personality, trigger: trigger,
                                     projectName: projectName(ref.cwd), sessionCount: ref.sessionCount)
         speechEngine.speak(context) { [weak window] line in window?.showSpeech(line) }
@@ -159,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let ref = ProjectRef(cwd: cwd, seed: ProjectIdentity.seed(forCWD: cwd),
                                  sessionCount: sessionCountByCwd[cwd] ?? 1)
             speak(.idleThought, for: ref)
+            grantXP(1, to: cwd)   // just being around, keeping you company, counts
         }
     }
 
@@ -182,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 for (cwd, activity) in results {
                     guard self.lastActivityByCwd[cwd] != activity else { continue }   // only on change
                     self.lastActivityByCwd[cwd] = activity
+                    self.grantXP(self.activityXP, to: cwd)   // working alongside you matures it
                     guard activity == .error || activity == .testing else { continue } // speak only on notable
                     let ref = ProjectRef(cwd: cwd, seed: ProjectIdentity.seed(forCWD: cwd),
                                          sessionCount: self.sessionCountByCwd[cwd] ?? 1)
@@ -213,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let active = Set(projectWindows.keys)
         let entries = registry.all().map { aimon in
             StableEntry(aimon: aimon,
-                        image: appearance.image(for: aimon.seed).nsImage(),
+                        image: appearance.image(for: aimon.seed, rarity: aimon.rarity, stage: aimon.stage).nsImage(),
                         isActive: active.contains(aimon.projectCWD))
         }
         let window = StableWindow(entries: entries)
@@ -236,10 +280,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func spawnDevMonster() {
         let seed = UInt64.random(in: 0..<UInt64.max)
-        let window = CompanionWindow(seed: seed, appearance: appearance)
+        // Showcase the range: a random rarity and stage so dev spawns exercise the new looks.
+        let rarity = Rarity.allCases.randomElement() ?? .common
+        let stage = Int.random(in: 1...Evolution.maxStage)
+        let open = appearance.image(for: seed, rarity: rarity, stage: stage)
+        let closed = appearance.image(for: seed, rarity: rarity, stage: stage, eyesClosed: true)
+        let window = CompanionWindow(image: open, closedEyesImage: closed, name: NameGenerator.name(seed: seed))
         cascade(window, index: devCompanions.count)
         if aimonsVisible { window.orderFrontRegardless() }
         devCompanions.append(window)
+    }
+
+    /// Dev: fast-forward evolution by granting a chunk of xp to every live AIMon.
+    @objc private func grantDevXP() {
+        for cwd in projectWindows.keys { grantXP(10, to: cwd) }
     }
 
     @objc private func despawnDevMonsters() {

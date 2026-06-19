@@ -7,12 +7,14 @@ final class CompanionWindow: NSPanel {
     private let skView: CompanionSKView
     private let minBound: CGSize
     private let maxBound: CGSize
-    /// Called when the monster is clicked (not dragged).
-    var onClick: (() -> Void)?
+    private let displayName: String
+    private var lastSpeech: String?
+    /// Called on a double-click that didn't move the window (e.g. focus the session).
+    var onDoubleClick: (() -> Void)?
 
-    init(seed: UInt64, appearance: AppearanceProvider,
+    init(image: PixelImage, closedEyesImage: PixelImage, name: String = "AImon",
          pixelScale: CGFloat = RenderConfig.default.pixelScale) {
-        let image = appearance.image(for: seed)
+        self.displayName = name
         let initial = CGSize(width: CGFloat(image.width) * pixelScale,
                              height: CGFloat(image.height) * pixelScale)
         self.minBound = CGSize(width: initial.width * RenderConfig.default.minScale,
@@ -45,13 +47,13 @@ final class CompanionWindow: NSPanel {
         skView.onScaleBy = { [weak self] factor, anchor in
             self?.scaleBy(factor, about: anchor)
         }
-        skView.onClick = { [weak self] in
-            (self?.skView.scene as? CompanionScene)?.reactExcited()   // a little "pet" reaction
-            self?.onClick?()
+        skView.onClick = { [weak self] in self?.showLastOrGreeting() }   // single click → talk
+        skView.onDoubleClick = { [weak self] in
+            (self?.skView.scene as? CompanionScene)?.reactExcited()       // pet jump
+            self?.onDoubleClick?()                                        // → focus the session
         }
 
-        let closedEyes = appearance.image(for: seed, eyesClosed: true)
-        let scene = CompanionScene(image: image, closedEyesImage: closedEyes, size: initial)
+        let scene = CompanionScene(image: image, closedEyesImage: closedEyesImage, size: initial)
         skView.presentScene(scene)
         contentView = skView
 
@@ -66,6 +68,11 @@ final class CompanionWindow: NSPanel {
     override var canBecomeKey: Bool { false }
 
     deinit { Log.lifecycle.debug("CompanionWindow released") }
+
+    /// Swap to a freshly rendered look (after evolving), keeping size and position.
+    func updateAppearance(image: PixelImage, closedEyesImage: PixelImage) {
+        (skView.scene as? CompanionScene)?.setTextures(image: image, closedEyesImage: closedEyesImage)
+    }
 
     /// Tear down for removal: stop SpriteKit's render loop, drop the scene and view hierarchy
     /// (releasing the texture and the display link that would otherwise outlive the window),
@@ -90,12 +97,26 @@ final class CompanionWindow: NSPanel {
     /// Render a speech bubble above the monster. The bubble is attached as a child window so it
     /// follows the monster when dragged. (Cadence/anti-spam is governed by the caller.)
     func showSpeech(_ text: String) {
+        lastSpeech = text
         if bubble == nil { bubble = SpeechBubbleWindow() }
         guard let bubble else { return }
         removeChildWindow(bubble)                  // re-anchor cleanly above the current position
-        bubble.show(text, above: frame, duration: 6)
+        bubble.show(text, above: frame, duration: CompanionWindow.readingDuration(for: text))
         addChildWindow(bubble, ordered: .above)    // AppKit now keeps it pinned as the monster moves
         (skView.scene as? CompanionScene)?.reactTalk()
+    }
+
+    /// Single click: re-show the last thing it said (instant — no LLM wait), or greet if it hasn't
+    /// spoken yet.
+    private func showLastOrGreeting() {
+        showSpeech(lastSpeech ?? "Hi! I'm \(displayName).")
+    }
+
+    /// Generous, length-aware on-screen time so a bubble is comfortably readable (≈2–3× the old
+    /// flat 6s for typical lines).
+    static func readingDuration(for text: String) -> TimeInterval {
+        let words = text.split { $0 == " " || $0 == "\n" }.count
+        return min(24, max(10, Double(words) * 1.0 + 5))
     }
 
     /// Show/hide both the monster and its bubble (for the menubar visibility toggle).
@@ -114,12 +135,15 @@ final class CompanionWindow: NSPanel {
 
     /// Update how many live sessions this project has. On an increase (a new session joined),
     /// the monster gives a brief reaction. `animated` is false for the initial spawn and while
-    /// hidden. (M4 will layer speech onto this same signal.)
+    /// hidden.
     func setSessionCount(_ count: Int, animated: Bool) {
         let increased = count > sessionCount
         sessionCount = count
         if animated && increased { (skView.scene as? CompanionScene)?.reactExcited() }
     }
+
+    /// A celebratory hop (e.g. on evolving).
+    func celebrate() { (skView.scene as? CompanionScene)?.reactExcited() }
 
     // MARK: - Keep the monster on screen
 

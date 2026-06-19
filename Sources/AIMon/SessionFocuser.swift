@@ -13,10 +13,25 @@ final class SessionFocuser {
     func focus(projectCWD cwd: String) {
         queue.async { [weak self] in
             guard let self, let pid = self.claudePID(forCWD: cwd),
-                  let bundleID = self.bundleIdentifier(ofPID: pid) else { return }
+                  let bundleID = self.bundleIdentifier(ofPID: pid) else {
+                Log.lifecycle.notice("focus: no terminal resolved for \(cwd)")
+                return
+            }
             DispatchQueue.main.async {
-                let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
-                app?.activate(options: [.activateAllWindows])
+                // NSWorkspace.openApplication(activates:true) reliably brings a running app forward
+                // even from a background/accessory agent — unlike NSRunningApplication.activate,
+                // which modern macOS denies as focus-stealing when the caller isn't frontmost.
+                let ws = NSWorkspace.shared
+                if let url = ws.urlForApplication(withBundleIdentifier: bundleID) {
+                    let cfg = NSWorkspace.OpenConfiguration()
+                    cfg.activates = true
+                    ws.openApplication(at: url, configuration: cfg) { _, error in
+                        if let error { Log.lifecycle.error("focus open failed: \(error.localizedDescription)") }
+                    }
+                } else {
+                    NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                        .first?.activate(options: [.activateAllWindows])
+                }
                 Log.lifecycle.notice("focus terminal \(bundleID) for \(cwd)")
             }
         }
