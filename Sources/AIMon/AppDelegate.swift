@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sessionCountByCwd: [String: Int] = [:]           // cwd -> last seen live session count
     private var lastSpokeByCwd: [String: Date] = [:]            // cwd -> last time the monster spoke (cadence)
     private var aimonByCwd: [String: AIMon] = [:]                // cwd -> resident AIMon (cached from registry)
+    private var behaviorByCwd: [String: BehaviorProfile] = [:]   // cwd -> personality-derived behaviour
     private var devCompanions: [CompanionWindow] = []
     private var aimonsVisible = true
     private let speechCooldown: TimeInterval = 4
@@ -95,9 +96,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let evo = greet ? registry.addXP(newSessionXP, forProjectCWD: ref.cwd, now: now) : nil
         let aimon = evo?.aimon ?? base
         aimonByCwd[ref.cwd] = aimon
+        let behavior = BehaviorProfileBuilder.profile(for: aimon.effectivePersonality)
+        behaviorByCwd[ref.cwd] = behavior
 
         let (open, closed) = appearanceImages(for: aimon)
-        let window = CompanionWindow(image: open, closedEyesImage: closed, name: aimon.name)
+        let render = RenderConfig(bobAmplitude: CGFloat(behavior.bobAmplitude), bobDuration: behavior.bobDuration)
+        let window = CompanionWindow(image: open, closedEyesImage: closed, name: aimon.name, renderConfig: render)
         window.setSessionCount(ref.sessionCount, animated: false)
         if let f = aimon.lastFrame {
             window.setFrame(NSRect(x: f.x, y: f.y, width: f.width, height: f.height), display: false)
@@ -137,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sessionCountByCwd[cwd] = nil
         lastSpokeByCwd[cwd] = nil
         aimonByCwd[cwd] = nil
+        behaviorByCwd[cwd] = nil
         nextIdleAt[cwd] = nil
         Log.lifecycle.notice("- despawn project \(projectLabel(cwd)) live=\(projectWindows.count)")
     }
@@ -155,6 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let result = registry.addXP(amount, forProjectCWD: cwd, now: Date()) else { return }
         aimonByCwd[cwd] = result.aimon
         guard result.didEvolve else { return }
+        behaviorByCwd[cwd] = BehaviorProfileBuilder.profile(for: result.aimon.effectivePersonality)  // matured cadence
         if let window = projectWindows[cwd] {
             let (open, closed) = appearanceImages(for: result.aimon)
             window.updateAppearance(image: open, closedEyesImage: closed)
@@ -180,7 +186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func speak(_ trigger: SpeechTrigger, for ref: ProjectRef) {
         guard aimonsVisible, let window = projectWindows[ref.cwd] else { return }
         let now = Date()
-        guard SpeechCadence.shouldSpeak(lastSpoke: lastSpokeByCwd[ref.cwd], now: now, cooldown: speechCooldown) else { return }
+        let cooldown = behaviorByCwd[ref.cwd]?.speechCooldown ?? speechCooldown
+        guard SpeechCadence.shouldSpeak(lastSpoke: lastSpokeByCwd[ref.cwd], now: now, cooldown: cooldown) else { return }
         lastSpokeByCwd[ref.cwd] = now
         let personality = aimonByCwd[ref.cwd]?.effectivePersonality
             ?? PersonalityGenerator.personality(seed: ref.seed)
@@ -197,7 +204,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let now = Date()
         for cwd in projectWindows.keys {
             guard let due = nextIdleAt[cwd], now >= due else { continue }
-            nextIdleAt[cwd] = now.addingTimeInterval(randomIdleInterval())
+            let behavior = behaviorByCwd[cwd]
+            nextIdleAt[cwd] = now.addingTimeInterval(randomIdleInterval(behavior))
+            // Reserved/quiet creatures may simply keep to themselves this round.
+            if let chance = behavior?.idleChance, Double.random(in: 0..<1) > chance { continue }
             let ref = ProjectRef(cwd: cwd, seed: ProjectIdentity.seed(forCWD: cwd),
                                  sessionCount: sessionCountByCwd[cwd] ?? 1)
             speak(.idleThought, for: ref)
@@ -205,7 +215,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func randomIdleInterval() -> TimeInterval { TimeInterval(Int.random(in: 240...480)) }  // 4–8 min
+    /// Per-creature idle gap (talkative ones muse more often); falls back to the old 4–8 min.
+    private func randomIdleInterval(_ behavior: BehaviorProfile?) -> TimeInterval {
+        let lo = behavior?.idleMin ?? 240, hi = behavior?.idleMax ?? 480
+        return TimeInterval(Int.random(in: lo...max(lo + 1, hi)))
+    }
 
     /// "Reads the work": tail each live project's transcript off-main and react to the genuinely
     /// notable moments only — running tests and errors — when they newly occur. Editing/running/

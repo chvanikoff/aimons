@@ -13,14 +13,14 @@ final class CompanionWindow: NSPanel {
     var onDoubleClick: (() -> Void)?
 
     init(image: PixelImage, closedEyesImage: PixelImage, name: String = "AImon",
-         pixelScale: CGFloat = RenderConfig.default.pixelScale) {
+         renderConfig: RenderConfig = .default) {
         self.displayName = name
-        let initial = CGSize(width: CGFloat(image.width) * pixelScale,
-                             height: CGFloat(image.height) * pixelScale)
-        self.minBound = CGSize(width: initial.width * RenderConfig.default.minScale,
-                               height: initial.height * RenderConfig.default.minScale)
-        self.maxBound = CGSize(width: initial.width * RenderConfig.default.maxScale,
-                               height: initial.height * RenderConfig.default.maxScale)
+        let initial = CGSize(width: CGFloat(image.width) * renderConfig.pixelScale,
+                             height: CGFloat(image.height) * renderConfig.pixelScale)
+        self.minBound = CGSize(width: initial.width * renderConfig.minScale,
+                               height: initial.height * renderConfig.minScale)
+        self.maxBound = CGSize(width: initial.width * renderConfig.maxScale,
+                               height: initial.height * renderConfig.maxScale)
 
         self.skView = CompanionSKView(frame: NSRect(origin: .zero, size: initial))
         skView.allowsTransparency = true
@@ -55,7 +55,8 @@ final class CompanionWindow: NSPanel {
             self?.onDoubleClick?()                                        // → focus the session
         }
 
-        let scene = CompanionScene(image: image, closedEyesImage: closedEyesImage, size: initial)
+        let scene = CompanionScene(image: image, closedEyesImage: closedEyesImage, size: initial,
+                                   renderConfig: renderConfig)
         skView.presentScene(scene)
         contentView = skView
 
