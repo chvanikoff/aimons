@@ -45,20 +45,65 @@ public enum Rarity: String, CaseIterable, Codable, Sendable {
     case common, uncommon, rare, epic, legendary, mythic
 
     public var displayName: String { rawValue.capitalized }
+
+    /// Total personality points distributed across the 5 traits at mint. Rarer creatures get a
+    /// bigger pool (more capable overall), but every creature spends a *fixed* budget — so traits
+    /// are lean and spiky rather than all near-max. (5 traits × 100 = 500 ceiling.)
+    public var traitBudget: Int {
+        switch self {
+        case .common:    return 150
+        case .uncommon:  return 185
+        case .rare:      return 220
+        case .epic:      return 255
+        case .legendary: return 300
+        case .mythic:    return 350
+        }
+    }
 }
 
 public enum PersonalityGenerator {
-    /// Five 0–100 traits from a stream distinct from the appearance generator's (seed is XOR-mixed),
-    /// so personality and looks vary independently.
-    public static func personality(seed: UInt64) -> Personality {
+    /// Distribute a rarity's fixed point budget across the five traits, deterministically from the
+    /// seed (a stream distinct from the appearance generator's). Rarer creatures get more points to
+    /// spend, but the *total* is fixed — so personalities are lean and spiky, and each one is
+    /// genuinely distinct rather than all-traits-near-max.
+    public static func personality(seed: UInt64, rarity: Rarity) -> Personality {
         var rng = SeededGenerator(seed: seed ^ 0x9E37_79B9_7F4A_7C15)
-        func trait() -> Int { Int(rng.next() % 101) }
-        return Personality(enthusiasm: trait(), patience: trait(), chaos: trait(), wisdom: trait(), snark: trait())
+        let p = distribute(budget: rarity.traitBudget, across: 5, cap: 100, using: &rng)
+        return Personality(enthusiasm: p[0], patience: p[1], chaos: p[2], wisdom: p[3], snark: p[4])
+    }
+
+    /// Convenience when only the seed is known: uses the seed's canonical (seed-derived) rarity, so
+    /// it matches what the registry would mint.
+    public static func personality(seed: UInt64) -> Personality {
+        personality(seed: seed, rarity: RarityGenerator.rarity(seed: seed))
     }
 
     /// Convenience: the derived archetype for a seed.
     public static func archetype(seed: UInt64) -> CompanionArchetype {
         personality(seed: seed).archetype
+    }
+
+    /// Split `budget` into `n` values each in 0...cap, summing to exactly `budget` (when feasible),
+    /// weighted by seeded random affinities so the shape is unique per creature.
+    private static func distribute(budget: Int, across n: Int, cap: Int,
+                                   using rng: inout SeededGenerator) -> [Int] {
+        let target = min(budget, n * cap)
+        let weights = (0..<n).map { _ in Double(rng.next() % 1000) + 1 }   // never 0
+        let total = weights.reduce(0, +)
+        var alloc = weights.map { min(cap, max(0, Int((Double(target) * $0 / total).rounded()))) }
+
+        // Reconcile rounding/clamping to hit the budget exactly, nudging shuffled indices.
+        var order = Array(0..<n)
+        for i in stride(from: n - 1, to: 0, by: -1) { order.swapAt(i, Int(rng.next() % UInt64(i + 1))) }
+        var step = 0
+        let guardLimit = n * cap * 2
+        while alloc.reduce(0, +) != target && step < guardLimit {
+            let i = order[step % n]; step += 1
+            let diff = target - alloc.reduce(0, +)
+            if diff > 0 { if alloc[i] < cap { alloc[i] += 1 } }
+            else if alloc[i] > 0 { alloc[i] -= 1 }
+        }
+        return alloc
     }
 }
 

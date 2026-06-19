@@ -25,16 +25,21 @@ public enum Evolution {
         return max(0, thresholds[s] - xp)
     }
 
-    /// Apply maturity to a base personality. Each stage past the first nudges the creature toward
-    /// wiser/calmer/more-spirited; chaos and snark are preserved.
+    /// Fixed point pool an evolution grants per tier (30 points each into the maturity traits:
+    /// wisdom +14, patience +10, enthusiasm +6 per stage). Standardised, so evolving is a known,
+    /// non-overpowered boost on top of the rarity budget.
+    public static let bonusPerStage = 30
+
+    /// Apply maturity to a base personality. Each stage past the first spends `bonusPerStage`
+    /// points on wiser/calmer/more-spirited; chaos and snark are preserved (they're character).
     public static func apply(_ base: Personality, stage: Int) -> Personality {
         let steps = max(0, stage - 1)
         func grow(_ v: Int, _ perStep: Int) -> Int { min(100, v + perStep * steps) }
         return Personality(
             enthusiasm: grow(base.enthusiasm, 6),
-            patience:   grow(base.patience, 8),
+            patience:   grow(base.patience, 10),
             chaos:      base.chaos,
-            wisdom:     grow(base.wisdom, 12),
+            wisdom:     grow(base.wisdom, 14),
             snark:      base.snark
         )
     }

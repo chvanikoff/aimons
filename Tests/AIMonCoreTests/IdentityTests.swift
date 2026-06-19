@@ -18,6 +18,23 @@ final class IdentityTests: XCTestCase {
         XCTAssertNotEqual(a, b)
     }
 
+    func test_personality_spendsExactlyTheRarityBudget() {
+        for r in Rarity.allCases {
+            let p = PersonalityGenerator.personality(seed: 12345, rarity: r)
+            let total = p.enthusiasm + p.patience + p.chaos + p.wisdom + p.snark
+            XCTAssertEqual(total, r.traitBudget, "trait total should equal \(r) budget \(r.traitBudget)")
+            for v in [p.enthusiasm, p.patience, p.chaos, p.wisdom, p.snark] {
+                XCTAssertTrue((0...100).contains(v), "trait \(v) out of range")
+            }
+        }
+    }
+
+    func test_rarerCreaturesHaveMorePoints() {
+        func total(_ p: Personality) -> Int { p.enthusiasm + p.patience + p.chaos + p.wisdom + p.snark }
+        XCTAssertGreaterThan(total(PersonalityGenerator.personality(seed: 5, rarity: .mythic)),
+                             total(PersonalityGenerator.personality(seed: 5, rarity: .common)))
+    }
+
     func test_personality_independentFromAppearanceStream() {
         // Same seed drives appearance traits AND personality, but via different streams — they
         // shouldn't be trivially correlated. Sanity: two seeds with same appearance-ish hue differ.

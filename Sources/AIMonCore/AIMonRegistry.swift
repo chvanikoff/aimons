@@ -96,10 +96,11 @@ public final class AIMonRegistry {
             return existing
         }
         let seed = ProjectIdentity.seed(forCWD: cwd)
+        let rarity = RarityGenerator.rarity(seed: seed)
         let minted = AIMon(id: UUID(), seed: seed,
                            name: NameGenerator.name(seed: seed),
-                           personality: PersonalityGenerator.personality(seed: seed),
-                           rarity: RarityGenerator.rarity(seed: seed),
+                           personality: PersonalityGenerator.personality(seed: seed, rarity: rarity),
+                           rarity: rarity,
                            projectCWD: cwd, createdAt: now, lastSeenAt: now)
         byProject[cwd] = minted
         save()

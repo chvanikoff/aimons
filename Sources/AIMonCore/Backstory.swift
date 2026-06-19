@@ -1,9 +1,11 @@
 import Foundation
 
 /// A short, deterministic origin story for a creature — a couple of sentences to harden its
-/// personality in the Stable's detail view. Same inputs always produce the same tale.
+/// personality in the Stable. The "nature" line is driven by the creature's *actual* traits (its
+/// strongest and weakest), and the quirk is themed to its dominant trait, so the story always makes
+/// sense alongside the trait bars. Same inputs always produce the same tale.
 public enum BackstoryGenerator {
-    public static func backstory(seed: UInt64, name: String, archetype: CompanionArchetype,
+    public static func backstory(seed: UInt64, name: String, personality: Personality,
                                  rarity: Rarity, projectName: String) -> String {
         var rng = SeededGenerator(seed: seed ^ 0x27D4_EB2F_1656_67C5)
         func pick(_ xs: [String]) -> String { xs[Int(rng.next() % UInt64(xs.count))] }
@@ -18,23 +20,22 @@ public enum BackstoryGenerator {
             "Booted up from a long-forgotten feature branch of \(project).",
         ])
 
-        let nature: String
-        switch archetype {
-        case .cheerful: nature = "Relentlessly upbeat, \(name) cheers for every passing test."
-        case .grumpy:   nature = "\(name) has strong opinions about your variable names — and shares them."
-        case .chill:    nature = "Nothing rattles \(name), not even a red build on a Friday afternoon."
-        case .dramatic: nature = "\(name) treats every off-by-one error like a season finale."
-        }
+        // Each trait carries a "high" and a "low" descriptor. The nature line pairs the creature's
+        // dominant trait (described high) with its weakest (described low) — so it reads true.
+        let traits: [(value: Int, high: String, low: String, key: String)] = [
+            (personality.enthusiasm, "bursting with restless energy", "hard to excite", "enthusiasm"),
+            (personality.patience,   "unshakeably patient",          "quick to fidget", "patience"),
+            (personality.chaos,      "gleefully chaotic",            "tidy and methodical", "chaos"),
+            (personality.wisdom,     "wise beyond its versions",     "charmingly naive", "wisdom"),
+            (personality.snark,      "razor-tongued",                "sweet-natured", "snark"),
+        ]
+        let dominant = traits.max { $0.value < $1.value }!
+        let weakest = traits.min { $0.value < $1.value }!
+        let nature = dominant.key == weakest.key
+            ? "\(name) is famously even-keeled."
+            : "\(name) is \(dominant.high), though \(weakest.low)."
 
-        let quirk = pick([
-            "Collects rare semicolons.",
-            "Naps in a corner of the screen between builds.",
-            "Insists it has read the entire changelog.",
-            "Hums quietly whenever the suite goes green.",
-            "Distrusts any function longer than the screen.",
-            "Keeps a private tally of every rebase.",
-            "Believes the bug is always in the last place you look, so it looks there first.",
-        ])
+        let quirk = quirk(forDominant: dominant.key, pick: pick)
 
         let flourish: String
         switch rarity {
@@ -49,11 +50,28 @@ public enum BackstoryGenerator {
         return [origin, nature, quirk, flourish].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    /// Convenience for a stored creature: derives project name and uses its matured archetype.
+    /// A quirk themed to the creature's strongest trait, so it reinforces the personality on show.
+    private static func quirk(forDominant key: String, pick: ([String]) -> String) -> String {
+        switch key {
+        case "enthusiasm": return pick(["Cheers out loud whenever the suite goes green.",
+                                        "Bounces in place between builds, unable to sit still."])
+        case "patience":   return pick(["Will sit perfectly still through a 40-minute CI run.",
+                                        "Has never once rushed a code review."])
+        case "chaos":      return pick(["Refactors three unrelated things while you debug one.",
+                                        "Keeps forty browser tabs open and swears they're all vital."])
+        case "wisdom":     return pick(["Quotes commit messages from years ago, verbatim.",
+                                        "Always seems to have read the docs already."])
+        case "snark":      return pick(["Has opinions about your variable names, and shares them.",
+                                        "Rates your git history out of ten, unkindly."])
+        default:           return "Keeps a private tally of every rebase."
+        }
+    }
+
+    /// Convenience for a stored creature: derives project name and uses its matured traits.
     public static func backstory(for aimon: AIMon) -> String {
         let project = (aimon.projectCWD as NSString).lastPathComponent
         return backstory(seed: aimon.seed, name: aimon.name,
-                         archetype: aimon.effectivePersonality.archetype,
+                         personality: aimon.effectivePersonality,
                          rarity: aimon.rarity, projectName: project)
     }
 }

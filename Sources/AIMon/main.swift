@@ -100,7 +100,7 @@ if CommandLine.arguments.contains("--stable-test") {
         let seed = ProjectIdentity.seed(forCWD: "/demo/\(rarity.rawValue)")
         let xp = i * 6   // 0,6,12,18,24,30 → spans stages 1→3
         let aimon = AIMon(id: UUID(), seed: seed, name: NameGenerator.name(seed: seed),
-                          personality: PersonalityGenerator.personality(seed: seed),
+                          personality: PersonalityGenerator.personality(seed: seed, rarity: rarity),
                           rarity: rarity, projectCWD: "/demo/\(rarity.rawValue)",
                           createdAt: created, lastSeenAt: created, xp: xp)
         let img = appearance.image(for: seed, rarity: rarity, stage: aimon.stage).nsImage()
@@ -146,7 +146,7 @@ if CommandLine.arguments.contains("--seed-showcase") {
         try? fm.createDirectory(atPath: cwd, withIntermediateDirectories: true)
         stamp += 100
         let a = AIMon(id: UUID(), seed: s, name: name ?? NameGenerator.name(seed: s),
-                      personality: PersonalityGenerator.personality(seed: s), rarity: rarity,
+                      personality: PersonalityGenerator.personality(seed: s, rarity: rarity), rarity: rarity,
                       projectCWD: cwd, createdAt: Date(timeIntervalSince1970: stamp),
                       lastSeenAt: Date(timeIntervalSince1970: stamp), xp: xp)
         reg.upsert(a)
@@ -164,6 +164,23 @@ if CommandLine.arguments.contains("--seed-showcase") {
         seed("\(home)/tmp/aimon-demo-evo\(i + 1)", evoSeed, .epic, xp: xp, name: evoName)
     }
     print("done — open the Stable to see them")
+    exit(0)
+}
+
+// Hidden dev mode: `AIMon --remint-personalities` regenerates every stored creature's personality
+// under the current (rarity-budgeted) model, keeping its id/name/rarity/xp/position. One-time
+// migration after changing how traits are generated.
+if CommandLine.arguments.contains("--remint-personalities") {
+    let reg = AIMonRegistry()
+    for a in reg.all() {
+        let fresh = AIMon(id: a.id, seed: a.seed, name: a.name,
+                          personality: PersonalityGenerator.personality(seed: a.seed, rarity: a.rarity),
+                          rarity: a.rarity, projectCWD: a.projectCWD, createdAt: a.createdAt,
+                          lastSeenAt: a.lastSeenAt, lastFrame: a.lastFrame, xp: a.xp)
+        reg.upsert(fresh)
+        let p = fresh.personality
+        print("reminted \(fresh.name) [\(fresh.rarity.rawValue)] budget=\(fresh.rarity.traitBudget) → e\(p.enthusiasm) p\(p.patience) c\(p.chaos) w\(p.wisdom) s\(p.snark)")
+    }
     exit(0)
 }
 
