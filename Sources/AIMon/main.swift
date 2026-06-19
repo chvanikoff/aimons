@@ -109,27 +109,61 @@ if CommandLine.arguments.contains("--stable-test") {
     let dir = "/tmp/aimon-render"; try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
     let ok = MainActor.assumeIsolated { () -> Bool in
-        // ImageRenderer can't lay out ScrollView/LazyVGrid, so render the cards eagerly (2 cols).
-        let cards = HStack(alignment: .top, spacing: 16) {
-            VStack(spacing: 16) { ForEach(Array(entries.prefix(3))) { AIMonCard(entry: $0) } }
-            VStack(spacing: 16) { ForEach(Array(entries.dropFirst(3).prefix(3))) { AIMonCard(entry: $0) } }
+        // ImageRenderer can't lay out ScrollView/LazyVGrid, so tile the card faces eagerly.
+        let fronts = VStack(spacing: 22) {
+            HStack(spacing: 22) { ForEach(Array(entries.prefix(3))) { CardFront(entry: $0) } }
+            HStack(spacing: 22) { ForEach(Array(entries.dropFirst(3))) { CardFront(entry: $0) } }
         }.padding(24).background(Color(nsColor: .windowBackgroundColor))
-        let cardsRenderer = ImageRenderer(content: cards)
-        cardsRenderer.proposedSize = ProposedViewSize(width: 480, height: nil)
-        let detail = AIMonDetailContent(entry: entries.last!)
-            .frame(width: 400).background(Color(nsColor: .windowBackgroundColor))
-        let detailRenderer = ImageRenderer(content: detail)
-        detailRenderer.proposedSize = ProposedViewSize(width: 400, height: nil)
-        guard let cImg = cardsRenderer.nsImage, let cTiff = cImg.tiffRepresentation,
+        let backs = HStack(spacing: 22) {
+            CardBack(entry: entries[2]); CardBack(entry: entries.last!)
+        }.padding(24).background(Color(nsColor: .windowBackgroundColor))
+        let frontsRenderer = ImageRenderer(content: fronts)
+        frontsRenderer.proposedSize = ProposedViewSize(width: 3 * CardMetrics.width + 4 * 22, height: nil)
+        let backsRenderer = ImageRenderer(content: backs)
+        backsRenderer.proposedSize = ProposedViewSize(width: 2 * CardMetrics.width + 3 * 22, height: nil)
+        guard let cImg = frontsRenderer.nsImage, let cTiff = cImg.tiffRepresentation,
               let cRep = NSBitmapImageRep(data: cTiff), let cPng = cRep.representation(using: .png, properties: [:]),
-              let dImg = detailRenderer.nsImage, let dTiff = dImg.tiffRepresentation,
+              let dImg = backsRenderer.nsImage, let dTiff = dImg.tiffRepresentation,
               let dRep = NSBitmapImageRep(data: dTiff), let dPng = dRep.representation(using: .png, properties: [:])
         else { return false }
         try? cPng.write(to: URL(fileURLWithPath: "\(dir)/stable.png"))
         try? dPng.write(to: URL(fileURLWithPath: "\(dir)/detail.png"))
         return true
     }
-    print(ok ? "wrote \(dir)/stable.png and detail.png" : "stable render failed")
+    print(ok ? "wrote \(dir)/stable.png (fronts) and detail.png (backs)" : "stable render failed")
+    exit(0)
+}
+
+// Hidden dev mode: `AIMon --seed-showcase` creates demo projects under ~/tmp and seeds the registry
+// with one AIMon per rarity (stages spread) plus an evolution trio (one creature at stages 1/2/3),
+// so the Stable shows an example of each. Safe to delete the ~/tmp/aimon-demo-* dirs afterwards.
+if CommandLine.arguments.contains("--seed-showcase") {
+    let fm = FileManager.default
+    let home = fm.homeDirectoryForCurrentUser.path
+    let reg = AIMonRegistry()
+    var stamp = 1_700_000_000.0
+    func seed(_ cwd: String, _ s: UInt64, _ rarity: Rarity, xp: Int, name: String? = nil) {
+        try? fm.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        stamp += 100
+        let a = AIMon(id: UUID(), seed: s, name: name ?? NameGenerator.name(seed: s),
+                      personality: PersonalityGenerator.personality(seed: s), rarity: rarity,
+                      projectCWD: cwd, createdAt: Date(timeIntervalSince1970: stamp),
+                      lastSeenAt: Date(timeIntervalSince1970: stamp), xp: xp)
+        reg.upsert(a)
+        print("seeded \(rarity.rawValue) stage\(a.stage) → \(cwd)")
+    }
+    let xpFor: [Rarity: Int] = [.common: 0, .uncommon: 0, .rare: 10, .epic: 12, .legendary: 30, .mythic: 30]
+    for r in Rarity.allCases {
+        let cwd = "\(home)/tmp/aimon-demo-\(r.rawValue)"
+        seed(cwd, ProjectIdentity.seed(forCWD: cwd), r, xp: xpFor[r] ?? 0)
+    }
+    // Evolution trio: the SAME creature (fixed seed) at stage 1 → 2 → 3.
+    let evoSeed: UInt64 = 0xC0FFEE_1234_5678
+    let evoName = NameGenerator.name(seed: evoSeed)
+    for (i, xp) in [0, 10, 30].enumerated() {
+        seed("\(home)/tmp/aimon-demo-evo\(i + 1)", evoSeed, .epic, xp: xp, name: evoName)
+    }
+    print("done — open the Stable to see them")
     exit(0)
 }
 

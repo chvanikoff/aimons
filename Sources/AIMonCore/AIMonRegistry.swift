@@ -133,6 +133,12 @@ public final class AIMonRegistry {
         return EvolutionResult(aimon: aimon, didEvolve: to > from, fromStage: from, toStage: to)
     }
 
+    /// Insert or replace a record (keyed by its projectCWD). Used to seed showcase/demo creatures.
+    public func upsert(_ aimon: AIMon) {
+        byProject[aimon.projectCWD] = aimon
+        save()
+    }
+
     public func rename(projectCWD cwd: String, to name: String) {
         guard var aimon = byProject[cwd] else { return }
         aimon.name = name

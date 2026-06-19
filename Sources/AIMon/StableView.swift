@@ -9,10 +9,11 @@ struct StableEntry: Identifiable {
     var id: UUID { aimon.id }
 }
 
-/// The Stable — a gamified gallery of every AIMon you've collected (one per project).
+/// The Stable — a gallery of collectible trading cards, one per AIMon. Tap a card to flip it and
+/// read that creature's backstory on the back. Card art/frame styling escalates with rarity and
+/// evolution stage (à la MTG / Pokémon foils).
 struct StableView: View {
     let entries: [StableEntry]
-    @State private var selected: StableEntry?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -31,205 +32,192 @@ struct StableView: View {
                 Spacer()
             } else {
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 16)], spacing: 16) {
-                        ForEach(entries) { entry in
-                            AIMonCard(entry: entry)
-                                .onTapGesture { selected = entry }
-                        }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: CardMetrics.width), spacing: 22)],
+                              spacing: 22) {
+                        ForEach(entries) { CollectibleCard(entry: $0) }
                     }
-                    .padding()
+                    .padding(22)
                 }
             }
         }
-        .frame(minWidth: 640, minHeight: 480)
-        .sheet(item: $selected) { AIMonDetailView(entry: $0) }
+        .frame(minWidth: 720, minHeight: 560)
     }
 }
 
-struct AIMonCard: View {
+enum CardMetrics {
+    static let width: CGFloat = 210
+    static let height: CGFloat = 294   // 2.5 : 3.5 trading-card ratio
+    static let corner: CGFloat = 14
+}
+
+/// A two-sided collectible card that flips in 3D on tap to reveal the backstory.
+struct CollectibleCard: View {
     let entry: StableEntry
-    private var rarity: Rarity { entry.aimon.rarity }
-    private var tier: Int { rarityTier(rarity) }   // 0…5
+    @State private var flipped = false
 
     var body: some View {
-        VStack(spacing: 10) {
-            ZStack(alignment: .topTrailing) {
-                spriteView
-                if entry.aimon.stage > 1 {
-                    Text("Lv\(entry.aimon.stage)")
-                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(Capsule().fill(.black.opacity(0.55)))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if entry.isActive {
-                    Label("live", systemImage: "circle.fill")
-                        .labelStyle(.iconOnly).foregroundStyle(.green).font(.system(size: 10))
-                        .padding(6)
-                }
-            }
-            HStack(spacing: 6) {
-                Text(entry.aimon.name).font(.headline)
-                RarityBadge(rarity: rarity)
-            }
-            StarRow(filled: tier + 1, color: rarityColor(rarity))
-            TraitBars(personality: entry.aimon.effectivePersonality)
-            Text(projectName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        ZStack {
+            CardFront(entry: entry).opacity(flipped ? 0 : 1)
+            CardBack(entry: entry).opacity(flipped ? 1 : 0)
+                .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
         }
-        .padding(14)
-        .frame(maxWidth: .infinity)
-        .background(RoundedRectangle(cornerRadius: 14).fill(cardGradient))
-        .overlay(RoundedRectangle(cornerRadius: 14)
-            .stroke(rarityColor(rarity).opacity(0.35 + Double(tier) * 0.11),
-                    lineWidth: 1 + CGFloat(tier) * 0.5))
-        .shadow(color: tier >= 4 ? rarityColor(rarity).opacity(0.55) : .clear, radius: tier >= 4 ? 9 : 0)
-        .contentShape(Rectangle())
-    }
-
-    // Rarer cards get a stronger rarity-tinted wash over the base surface.
-    private var cardGradient: LinearGradient {
-        let tint = rarityColor(rarity).opacity(Double(tier) * 0.05)
-        return LinearGradient(colors: [Color(nsColor: .controlBackgroundColor).opacity(0.6),
-                                       tint],
-                              startPoint: .top, endPoint: .bottom)
-    }
-
-    @ViewBuilder private var spriteView: some View {
-        if let image = entry.image {
-            Image(nsImage: image).interpolation(.none).resizable()
-                .frame(width: 84, height: 84)
-        } else {
-            RoundedRectangle(cornerRadius: 8).fill(.secondary.opacity(0.2)).frame(width: 84, height: 84)
-        }
-    }
-
-    private var projectName: String {
-        let name = (entry.aimon.projectCWD as NSString).lastPathComponent
-        return name.isEmpty ? entry.aimon.projectCWD : name
+        .frame(width: CardMetrics.width, height: CardMetrics.height)
+        .rotation3DEffect(.degrees(flipped ? 180 : 0), axis: (x: 0, y: 1, z: 0), perspective: 0.4)
+        .onTapGesture { withAnimation(.spring(response: 0.55, dampingFraction: 0.85)) { flipped.toggle() } }
+        .shadow(color: RarityStyle.tier(entry.aimon.rarity) >= 4
+                ? RarityStyle.primary(entry.aimon.rarity).opacity(0.5) : .black.opacity(0.25),
+                radius: RarityStyle.tier(entry.aimon.rarity) >= 4 ? 12 : 5, y: 3)
     }
 }
 
-/// The full dossier for one creature, shown as a sheet when its card is tapped.
-struct AIMonDetailView: View {
-    let entry: StableEntry
-    @Environment(\.dismiss) private var dismiss
-    private var tier: Int { rarityTier(entry.aimon.rarity) }
+// MARK: - Card faces
 
-    var body: some View {
-        VStack(spacing: 0) {
-            ScrollView { AIMonDetailContent(entry: entry) }
-            Divider()
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
-            }
-            .padding(12)
-        }
-        .frame(width: 400, height: 560)
-        .background(LinearGradient(colors: [rarityColor(entry.aimon.rarity).opacity(Double(tier) * 0.06),
-                                            Color(nsColor: .windowBackgroundColor)],
-                                   startPoint: .top, endPoint: .bottom))
-    }
-}
-
-/// The scrollable body of the detail sheet (factored out so it can be rendered eagerly in tests —
-/// ImageRenderer can't lay out a ScrollView's content).
-struct AIMonDetailContent: View {
+struct CardFront: View {
     let entry: StableEntry
     private var aimon: AIMon { entry.aimon }
     private var rarity: Rarity { aimon.rarity }
-    private var tier: Int { rarityTier(rarity) }
+    private var tier: Int { RarityStyle.tier(rarity) }
 
     var body: some View {
-        VStack(spacing: 16) {
-            bigSprite
-            VStack(spacing: 6) {
-                Text(aimon.name).font(.system(size: 26, weight: .bold))
-                HStack(spacing: 8) {
-                    RarityBadge(rarity: rarity)
-                    StarRow(filled: tier + 1, color: rarityColor(rarity))
-                }
-            }
-            stageSection
-            TraitBars(personality: aimon.effectivePersonality)
-                .frame(maxWidth: 300)
-            Divider()
-            Text(BackstoryGenerator.backstory(for: aimon))
-                .font(.callout).foregroundStyle(.primary.opacity(0.85))
-                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-            metaSection
+        VStack(spacing: 7) {
+            titleBar
+            artWindow
+            typeLine
+            statBox
+            Spacer(minLength: 0)
+            footer
         }
-        .padding(24)
+        .padding(11)
+        .frame(width: CardMetrics.width, height: CardMetrics.height)
+        .background(CardFrame(rarity: rarity))
     }
 
-    @ViewBuilder private var bigSprite: some View {
-        Group {
+    private var titleBar: some View {
+        HStack(spacing: 4) {
+            Text(aimon.name).font(.system(size: 15, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
+            Spacer(minLength: 2)
+            Image(systemName: "diamond.fill").font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .background(Capsule().fill(.black.opacity(0.28)))
+    }
+
+    private var artWindow: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8).fill(RarityStyle.artBackground(rarity))
             if let image = entry.image {
-                Image(nsImage: image).interpolation(.none).resizable()
-            } else {
-                RoundedRectangle(cornerRadius: 12).fill(.secondary.opacity(0.2))
+                Image(nsImage: image).interpolation(.none).resizable().scaledToFit().padding(14)
+            }
+            if entry.isActive {
+                Label("live", systemImage: "circle.fill").labelStyle(.iconOnly)
+                    .foregroundStyle(.green).font(.system(size: 9))
+                    .padding(6).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
         }
-        .frame(width: 150, height: 150)
-        .shadow(color: tier >= 4 ? rarityColor(rarity).opacity(0.6) : .clear, radius: 14)
+        .frame(height: 116)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.55), lineWidth: 1.5))
     }
 
-    private var stageSection: some View {
-        VStack(spacing: 4) {
-            Text("Evolution — Stage \(aimon.stage) of \(Evolution.maxStage)")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            if let toNext = Evolution.xpToNextStage(fromXP: aimon.xp) {
-                ProgressView(value: stageProgress)
-                    .frame(maxWidth: 240).tint(rarityColor(rarity))
-                Text("\(toNext) xp to next stage").font(.system(size: 10)).foregroundStyle(.secondary)
-            } else {
-                Text("Fully evolved").font(.system(size: 10, weight: .medium)).foregroundStyle(rarityColor(rarity))
+    private var typeLine: some View {
+        HStack(spacing: 4) {
+            Text(aimon.effectivePersonality.archetype.rawValue.capitalized)
+                .font(.system(size: 10, weight: .semibold))
+            StarRow(filled: tier + 1, color: .white)
+            Spacer()
+            if aimon.stage > 1 {
+                Text("Lv\(aimon.stage)").font(.system(size: 9, weight: .bold))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(.white.opacity(0.25)))
             }
         }
+        .foregroundStyle(.white.opacity(0.95))
+        .padding(.horizontal, 3)
     }
 
-    private var metaSection: some View {
-        VStack(spacing: 2) {
-            Text("Project: \((aimon.projectCWD as NSString).lastPathComponent)")
-            Text("Discovered \(aimon.createdAt.formatted(date: .abbreviated, time: .omitted)) · \(aimon.xp) xp")
+    private var statBox: some View {
+        TraitBars(personality: aimon.effectivePersonality, color: .white)
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 7).fill(.black.opacity(0.22)))
+    }
+
+    private var footer: some View {
+        HStack(spacing: 4) {
+            Text(rarity.displayName.uppercased()).font(.system(size: 8, weight: .black))
+            Spacer()
+            Text((aimon.projectCWD as NSString).lastPathComponent).font(.system(size: 8)).lineLimit(1)
         }
-        .font(.system(size: 10)).foregroundStyle(.secondary)
-    }
-
-    private var stageProgress: Double {
-        let s = aimon.stage
-        guard s < Evolution.maxStage else { return 1 }
-        let lower = Evolution.thresholds[s - 1], upper = Evolution.thresholds[s]
-        guard upper > lower else { return 1 }
-        return min(1, max(0, Double(aimon.xp - lower) / Double(upper - lower)))
+        .foregroundStyle(.white.opacity(0.8))
+        .padding(.horizontal, 4)
     }
 }
 
-private struct StarRow: View {
+struct CardBack: View {
+    let entry: StableEntry
+    private var aimon: AIMon { entry.aimon }
+    private var rarity: Rarity { aimon.rarity }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text(aimon.name).font(.system(size: 17, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
+            Image(systemName: "sparkles").font(.system(size: 22)).foregroundStyle(.white.opacity(0.85))
+            Text(BackstoryGenerator.backstory(for: aimon))
+                .font(.system(size: 12, design: .serif)).italic()
+                .foregroundStyle(.white.opacity(0.95))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 9).fill(.black.opacity(0.26)))
+            Spacer(minLength: 0)
+            Text("\(rarity.displayName) · Stage \(aimon.stage)/\(Evolution.maxStage)")
+                .font(.system(size: 9, weight: .semibold)).foregroundStyle(.white.opacity(0.75))
+            Text("tap to flip back").font(.system(size: 8)).foregroundStyle(.white.opacity(0.5))
+        }
+        .padding(16)
+        .frame(width: CardMetrics.width, height: CardMetrics.height)
+        .background(CardFrame(rarity: rarity))
+    }
+}
+
+// MARK: - Shared frame & widgets
+
+/// The rarity-themed card frame: a gradient body, a foil sheen for high tiers, and a coloured edge.
+struct CardFrame: View {
+    let rarity: Rarity
+    private var tier: Int { RarityStyle.tier(rarity) }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: CardMetrics.corner).fill(RarityStyle.frameGradient(rarity))
+            if tier >= 4 {   // legendary & mythic get a holographic sheen
+                RoundedRectangle(cornerRadius: CardMetrics.corner)
+                    .fill(RarityStyle.foilSheen).blendMode(.plusLighter).opacity(0.30)
+            }
+            RoundedRectangle(cornerRadius: CardMetrics.corner)
+                .strokeBorder(RarityStyle.primary(rarity), lineWidth: 1.5 + CGFloat(tier) * 0.6)
+            RoundedRectangle(cornerRadius: CardMetrics.corner)
+                .strokeBorder(.white.opacity(0.25), lineWidth: 0.5).padding(2)
+        }
+    }
+}
+
+struct StarRow: View {
     let filled: Int
     let color: Color
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 1) {
             ForEach(0..<max(1, filled), id: \.self) { _ in
-                Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(color)
+                Image(systemName: "star.fill").font(.system(size: 7)).foregroundStyle(color)
             }
         }
     }
 }
 
-private struct RarityBadge: View {
-    let rarity: Rarity
-    var body: some View {
-        Text(rarity.displayName.uppercased())
-            .font(.system(size: 9, weight: .bold))
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Capsule().fill(rarityColor(rarity)))
-            .foregroundStyle(.white)
-    }
-}
-
-private struct TraitBars: View {
+struct TraitBars: View {
     let personality: Personality
+    var color: Color = .accentColor
     var body: some View {
         VStack(spacing: 3) {
             bar("Enthusiasm", personality.enthusiasm)
@@ -241,33 +229,63 @@ private struct TraitBars: View {
     }
 
     private func bar(_ label: String, _ value: Int) -> some View {
-        HStack(spacing: 6) {
-            Text(label).font(.system(size: 9)).frame(width: 64, alignment: .leading).foregroundStyle(.secondary)
+        HStack(spacing: 5) {
+            Text(label).font(.system(size: 8)).frame(width: 58, alignment: .leading)
+                .foregroundStyle(color.opacity(0.85))
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.secondary.opacity(0.18))
-                    Capsule().fill(.tint).frame(width: geo.size.width * CGFloat(value) / 100)
+                    Capsule().fill(color.opacity(0.18))
+                    Capsule().fill(color).frame(width: geo.size.width * CGFloat(value) / 100)
                 }
             }
-            .frame(height: 6)
-            Text("\(value)").font(.system(size: 9, weight: .medium).monospacedDigit())
-                .frame(width: 22, alignment: .trailing).foregroundStyle(.secondary)
+            .frame(height: 5)
+            Text("\(value)").font(.system(size: 8, weight: .medium).monospacedDigit())
+                .frame(width: 18, alignment: .trailing).foregroundStyle(color.opacity(0.85))
         }
     }
 }
 
-/// Rarity's position in the ladder (0 = common … 5 = mythic).
-private func rarityTier(_ rarity: Rarity) -> Int {
-    Rarity.allCases.firstIndex(of: rarity) ?? 0
-}
+// MARK: - Rarity styling
 
-private func rarityColor(_ rarity: Rarity) -> Color {
-    switch rarity {
-    case .common:    return .gray
-    case .uncommon:  return .green
-    case .rare:      return .blue
-    case .epic:      return .purple
-    case .legendary: return .orange
-    case .mythic:    return .pink
+enum RarityStyle {
+    static func tier(_ rarity: Rarity) -> Int { Rarity.allCases.firstIndex(of: rarity) ?? 0 }
+
+    static func primary(_ rarity: Rarity) -> Color {
+        switch rarity {
+        case .common:    return Color(red: 0.55, green: 0.57, blue: 0.60)
+        case .uncommon:  return Color(red: 0.20, green: 0.70, blue: 0.40)
+        case .rare:      return Color(red: 0.20, green: 0.50, blue: 0.90)
+        case .epic:      return Color(red: 0.60, green: 0.35, blue: 0.85)
+        case .legendary: return Color(red: 0.95, green: 0.60, blue: 0.15)
+        case .mythic:    return Color(red: 0.95, green: 0.30, blue: 0.65)
+        }
     }
+
+    static func secondary(_ rarity: Rarity) -> Color {
+        switch rarity {
+        case .common:    return Color(red: 0.32, green: 0.34, blue: 0.38)
+        case .uncommon:  return Color(red: 0.10, green: 0.42, blue: 0.30)
+        case .rare:      return Color(red: 0.12, green: 0.26, blue: 0.55)
+        case .epic:      return Color(red: 0.34, green: 0.18, blue: 0.55)
+        case .legendary: return Color(red: 0.70, green: 0.32, blue: 0.06)
+        case .mythic:    return Color(red: 0.55, green: 0.12, blue: 0.45)
+        }
+    }
+
+    /// The card body gradient (darker, so white text and panels pop).
+    static func frameGradient(_ rarity: Rarity) -> LinearGradient {
+        LinearGradient(colors: [primary(rarity).opacity(0.95), secondary(rarity)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    /// The art-window backdrop — a soft light panel tinted by rarity.
+    static func artBackground(_ rarity: Rarity) -> LinearGradient {
+        LinearGradient(colors: [.white.opacity(0.92), primary(rarity).opacity(0.22)],
+                       startPoint: .top, endPoint: .bottom)
+    }
+
+    /// A holographic rainbow sheen for legendary/mythic foils.
+    static let foilSheen = AngularGradient(
+        colors: [.pink, .purple, .blue, .cyan, .green, .yellow, .orange, .pink],
+        center: .center)
 }
