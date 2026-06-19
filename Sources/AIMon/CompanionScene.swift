@@ -13,6 +13,7 @@ final class CompanionScene: SKScene {
     private let renderConfig: RenderConfig
     private var sprite: SKSpriteNode?
     private var openTexture: SKTexture?
+    private var desiredSize: CGSize = .zero   // laid-out base size; re-asserted after texture swaps
     private let fitFraction: CGFloat = 0.82
 
     init(image: PixelImage, closedEyesImage: PixelImage?, size: CGSize, renderConfig: RenderConfig = .default) {
@@ -57,6 +58,7 @@ final class CompanionScene: SKScene {
         let t = tex.size()
         let scale = min(container.width / t.width, container.height / t.height) * fitFraction
         node.size = CGSize(width: t.width * scale, height: t.height * scale)
+        desiredSize = node.size
     }
 
     // MARK: - Idle: bob (position) + breathe (scale) + blink (texture)
@@ -77,11 +79,15 @@ final class CompanionScene: SKScene {
         guard let openTexture, let closedCG else { return }
         let closed = SKTexture(cgImage: closedCG)
         closed.filteringMode = .nearest
+        let open = openTexture
+        // NB: SKAction.setTexture(_:resize:false) still resizes the node to the texture's native
+        // size (a SpriteKit gotcha) — which shrank monsters to ~7px. Swap via the property and
+        // re-assert the laid-out size instead.
         let blink = SKAction.sequence([
             SKAction.wait(forDuration: 4.5, withRange: 4.0),   // every ~2.5–6.5s, varied
-            SKAction.setTexture(closed, resize: false),
+            SKAction.run { [weak self, weak node] in node?.texture = closed; node?.size = self?.desiredSize ?? node?.size ?? .zero },
             SKAction.wait(forDuration: 0.13),
-            SKAction.setTexture(openTexture, resize: false),
+            SKAction.run { [weak self, weak node] in node?.texture = open; node?.size = self?.desiredSize ?? node?.size ?? .zero },
         ])
         node.run(.repeatForever(blink), withKey: "blink")
     }
