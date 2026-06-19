@@ -1,19 +1,26 @@
 import SpriteKit
 
-/// An SKView that forwards scroll-wheel input as a resize request anchored at the cursor, and
-/// distinguishes a single click (show last message) from a double click (focus the session) from a
-/// drag (move the window).
+/// An SKView that fully owns mouse handling for its borderless panel: scroll-wheel resize, manual
+/// window dragging, and click classification (single vs double vs drag).
+///
+/// We do the dragging ourselves (rather than `isMovableByWindowBackground`) because that AppKit
+/// affordance swallows/!restarts mouse tracking on a non-activating panel, which made
+/// `NSEvent.clickCount` unreliable — double-clicks never registered. Owning the events lets us
+/// detect a double-click by timestamp, robustly, in tmux or a plain terminal alike.
 final class CompanionSKView: SKView {
-    /// Called with a multiplicative scale factor (>1 grow, <1 shrink) and the cursor
-    /// location in global screen coordinates, so resizing can keep the cursor over the window.
+    /// Multiplicative scale factor (>1 grow, <1 shrink) + cursor location (global), for zoom.
     var onScaleBy: ((CGFloat, NSPoint) -> Void)?
-    /// A single click that did NOT move the window.
+    /// A single click that didn't move the window.
     var onClick: (() -> Void)?
-    /// A double click that did NOT move the window.
+    /// A double click that didn't move the window.
     var onDoubleClick: (() -> Void)?
 
-    private var mouseDownWindowOrigin: NSPoint?
+    private var dragStartMouse: NSPoint?    // screen coords at mouse-down
+    private var dragStartOrigin: NSPoint?   // window origin at mouse-down
+    private var didDrag = false
+    private var lastClickTime: TimeInterval = 0
     private var pendingSingleClick: DispatchWorkItem?
+    private let dragThreshold: CGFloat = 3
 
     override func scrollWheel(with event: NSEvent) {
         let factor = 1.0 + (event.scrollingDeltaY * 0.005)
@@ -22,25 +29,32 @@ final class CompanionSKView: SKView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        mouseDownWindowOrigin = window?.frame.origin
-        super.mouseDown(with: event)
+        dragStartMouse = NSEvent.mouseLocation
+        dragStartOrigin = window?.frame.origin
+        didDrag = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let startMouse = dragStartMouse, let startOrigin = dragStartOrigin else { return }
+        let now = NSEvent.mouseLocation
+        let dx = now.x - startMouse.x, dy = now.y - startMouse.y
+        if abs(dx) > dragThreshold || abs(dy) > dragThreshold { didDrag = true }
+        // setFrameOrigin is overridden to clamp on-screen, so dragging stays contained live.
+        window?.setFrameOrigin(NSPoint(x: startOrigin.x + dx, y: startOrigin.y + dy))
     }
 
     override func mouseUp(with event: NSEvent) {
-        defer { mouseDownWindowOrigin = nil; super.mouseUp(with: event) }
-        // A click is a press+release where the window didn't move (a drag moves it via
-        // isMovableByWindowBackground, changing the origin).
-        guard let start = mouseDownWindowOrigin, let now = window?.frame.origin,
-              abs(start.x - now.x) < 3, abs(start.y - now.y) < 3 else {
-            pendingSingleClick?.cancel(); pendingSingleClick = nil
-            return
-        }
-        if event.clickCount >= 2 {
-            // The first click of a double already scheduled a single — cancel it, fire double.
+        defer { dragStartMouse = nil; dragStartOrigin = nil }
+        if didDrag { didDrag = false; return }   // it was a drag, not a click
+
+        let t = event.timestamp
+        if t - lastClickTime < NSEvent.doubleClickInterval {
+            lastClickTime = 0
             pendingSingleClick?.cancel(); pendingSingleClick = nil
             onDoubleClick?()
         } else {
-            // Defer the single action briefly; if a second click lands, the double cancels it.
+            lastClickTime = t
+            // Defer the single action; a second click within the interval upgrades it to a double.
             let work = DispatchWorkItem { [weak self] in self?.pendingSingleClick = nil; self?.onClick?() }
             pendingSingleClick = work
             DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: work)

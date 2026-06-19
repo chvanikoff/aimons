@@ -67,12 +67,24 @@ final class SpeechBubbleWindow: NSPanel {
         DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
     }
 
+    /// Re-center above a (possibly resized) anchor frame without disturbing the dismiss timer.
+    func reposition(above anchorFrame: NSRect) {
+        guard isVisible else { return }
+        let proposed = NSRect(x: anchorFrame.midX - frame.width / 2, y: anchorFrame.maxY + 6,
+                              width: frame.width, height: frame.height)
+        setFrame(WindowGeometry.clamp(proposed, within: NSScreen.screens.map { $0.frame }), display: true)
+    }
+
     func dismiss() {
         dismissWork?.cancel()
         dismissWork = nil
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.25
             animator().alphaValue = 0
-        }, completionHandler: { [weak self] in self?.orderOut(nil) })
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            self.parent?.removeChildWindow(self)   // don't linger in the parent's childWindows
+            self.orderOut(nil)
+        })
     }
 }

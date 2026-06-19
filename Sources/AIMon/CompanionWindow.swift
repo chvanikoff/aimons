@@ -36,7 +36,9 @@ final class CompanionWindow: NSPanel {
         backgroundColor = .clear
         hasShadow = false
         level = .floating
-        isMovableByWindowBackground = true   // drag the monster to move it
+        // Dragging is handled manually in CompanionSKView (AppKit's background-drag swallowed mouse
+        // tracking on this non-activating panel, making double-clicks unrecognisable).
+        isMovableByWindowBackground = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         ignoresMouseEvents = false
         // Keep NSPanel's default isReleasedWhenClosed = false: we own the window via the
@@ -167,6 +169,7 @@ final class CompanionWindow: NSPanel {
         let clamped = WindowGeometry.clamp(zoomed, within: CompanionWindow.screenFrames())
         setFrame(clamped, display: true)
         skView.scene?.size = clamped.size
+        bubble?.reposition(above: clamped)   // keep the bubble centered over the resized monster
     }
 
     private static func screenFrames() -> [CGRect] {

@@ -65,6 +65,10 @@ final class SessionFocuser {
         return nil
     }
 
+    /// Run a subprocess, draining stdout on a concurrent reader so a full pipe buffer can't deadlock
+    /// it, and killing it after `probeTimeout`. (`ps -axww -o command=` easily exceeds the 64KB pipe
+    /// buffer on a busy machine; reading only after waiting would wedge the child and silently fail
+    /// every focus — which is exactly what was happening.)
     private func run(_ launchPath: String, _ args: [String]) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launchPath)
@@ -72,11 +76,29 @@ final class SessionFocuser {
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
-        let done = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in done.signal() }
+
+        let readQueue = DispatchQueue(label: "io.romanc.aimon.focus.read")
+        let readDone = DispatchSemaphore(value: 0)
+        let collected = Box()
+        readQueue.async {
+            collected.data = out.fileHandleForReading.readDataToEndOfFile()
+            readDone.signal()
+        }
+
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { return nil }
-        if done.wait(timeout: .now() + probeTimeout) == .timedOut { process.terminate(); return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)
+
+        if exited.wait(timeout: .now() + probeTimeout) == .timedOut {
+            process.terminate()
+            _ = exited.wait(timeout: .now() + 0.5)
+            _ = readDone.wait(timeout: .now() + 0.5)
+            return nil
+        }
+        _ = readDone.wait(timeout: .now() + 1.0)
+        return String(data: collected.data, encoding: .utf8)
     }
+
+    /// Boxed buffer shared by the reader and waiter; the semaphore orders the read after the write.
+    private final class Box { var data = Data() }
 }
