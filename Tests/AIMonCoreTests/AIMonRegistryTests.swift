@@ -53,4 +53,46 @@ final class AIMonRegistryTests: XCTestCase {
     func test_missingFile_startsEmpty() {
         XCTAssertEqual(AIMonRegistry(fileURL: tempURL()).all().count, 0)
     }
+
+    func test_addXP_accumulatesAndReportsEvolution() {
+        let url = tempURL(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let reg = AIMonRegistry(fileURL: url)
+        reg.aimon(forProjectCWD: "/x", now: now)
+
+        let r1 = reg.addXP(5, forProjectCWD: "/x", now: now)
+        XCTAssertEqual(r1?.aimon.xp, 5)
+        XCTAssertEqual(r1?.didEvolve, false)
+        XCTAssertEqual(r1?.toStage, 1)
+
+        let r2 = reg.addXP(5, forProjectCWD: "/x", now: now)   // 10 total → crosses into stage 2
+        XCTAssertEqual(r2?.aimon.xp, 10)
+        XCTAssertEqual(r2?.didEvolve, true)
+        XCTAssertEqual(r2?.fromStage, 1)
+        XCTAssertEqual(r2?.toStage, 2)
+
+        XCTAssertNil(reg.addXP(1, forProjectCWD: "/unknown", now: now))
+    }
+
+    func test_xp_persistsAcrossReload() {
+        let url = tempURL(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        do {
+            let reg = AIMonRegistry(fileURL: url)
+            reg.aimon(forProjectCWD: "/x", now: now)
+            reg.addXP(12, forProjectCWD: "/x", now: now)
+        }
+        XCTAssertEqual(AIMonRegistry(fileURL: url).aimon(forProjectCWD: "/x")?.xp, 12)
+    }
+
+    func test_decodesLegacyRecordWithoutXP() throws {
+        // A record written before evolution existed has no "xp" key → must default to 0, not throw.
+        let json = """
+        {"id":"\(UUID().uuidString)","seed":7,"name":"Old",
+         "personality":{"enthusiasm":10,"patience":20,"chaos":30,"wisdom":40,"snark":50},
+         "rarity":"rare","projectCWD":"/x","createdAt":0,"lastSeenAt":0}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(AIMon.self, from: json)
+        XCTAssertEqual(decoded.xp, 0)
+        XCTAssertEqual(decoded.stage, 1)
+        XCTAssertEqual(decoded.name, "Old")
+    }
 }

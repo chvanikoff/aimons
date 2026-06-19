@@ -14,19 +14,57 @@ public struct AIMon: Codable, Equatable, Sendable {
     public let id: UUID
     public let seed: UInt64
     public var name: String
+    /// The *base* (seed-derived, at-mint) personality. Maturity is applied on top — see
+    /// `effectivePersonality`. Stored as the base so growth is reproducible and reversible.
     public let personality: Personality
     public let rarity: Rarity
     public let projectCWD: String
     public let createdAt: Date
     public var lastSeenAt: Date
     public var lastFrame: StoredFrame?
+    /// Experience accrued from being active. Drives evolution stage.
+    public var xp: Int
 
     public init(id: UUID, seed: UInt64, name: String, personality: Personality, rarity: Rarity,
-                projectCWD: String, createdAt: Date, lastSeenAt: Date, lastFrame: StoredFrame? = nil) {
+                projectCWD: String, createdAt: Date, lastSeenAt: Date, lastFrame: StoredFrame? = nil,
+                xp: Int = 0) {
         self.id = id; self.seed = seed; self.name = name; self.personality = personality
         self.rarity = rarity; self.projectCWD = projectCWD; self.createdAt = createdAt
-        self.lastSeenAt = lastSeenAt; self.lastFrame = lastFrame
+        self.lastSeenAt = lastSeenAt; self.lastFrame = lastFrame; self.xp = xp
     }
+
+    /// The current evolution stage (1…3), derived from xp.
+    public var stage: Int { Evolution.stage(forXP: xp) }
+
+    /// Personality as matured by the creature's stage — what speech and the Stable should show.
+    public var effectivePersonality: Personality { Evolution.apply(personality, stage: stage) }
+
+    // Tolerant decoding: records written before evolution existed have no `xp` → default to 0.
+    private enum CodingKeys: String, CodingKey {
+        case id, seed, name, personality, rarity, projectCWD, createdAt, lastSeenAt, lastFrame, xp
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        seed = try c.decode(UInt64.self, forKey: .seed)
+        name = try c.decode(String.self, forKey: .name)
+        personality = try c.decode(Personality.self, forKey: .personality)
+        rarity = try c.decode(Rarity.self, forKey: .rarity)
+        projectCWD = try c.decode(String.self, forKey: .projectCWD)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        lastSeenAt = try c.decode(Date.self, forKey: .lastSeenAt)
+        lastFrame = try c.decodeIfPresent(StoredFrame.self, forKey: .lastFrame)
+        xp = try c.decodeIfPresent(Int.self, forKey: .xp) ?? 0
+    }
+}
+
+/// Outcome of granting xp: the updated record, and whether it crossed into a new stage.
+public struct EvolutionResult: Equatable, Sendable {
+    public let aimon: AIMon
+    public let didEvolve: Bool
+    public let fromStage: Int
+    public let toStage: Int
 }
 
 /// Owns the stable of AIMons and project→AIMon bindings, persisted as JSON. Identity is stable:
@@ -80,6 +118,19 @@ public final class AIMonRegistry {
         aimon.lastFrame = frame
         byProject[cwd] = aimon
         save()
+    }
+
+    /// Grant experience to a project's AIMon and report whether it evolved. No-op (nil) if unknown.
+    @discardableResult
+    public func addXP(_ amount: Int, forProjectCWD cwd: String, now: Date) -> EvolutionResult? {
+        guard var aimon = byProject[cwd] else { return nil }
+        let from = aimon.stage
+        aimon.xp += max(0, amount)
+        aimon.lastSeenAt = now
+        let to = aimon.stage
+        byProject[cwd] = aimon
+        save()
+        return EvolutionResult(aimon: aimon, didEvolve: to > from, fromStage: from, toStage: to)
     }
 
     public func rename(projectCWD cwd: String, to name: String) {

@@ -58,13 +58,18 @@ if CommandLine.arguments.contains("--render-test") {
     }
 
     let appearance = ProceduralAppearance()
-    let cwds = ["/Users/roman/Projects/aimon", "/Users/roman/Projects/web", "/Users/roman/work/api",
-                "/tmp/scratch", "/Users/roman/Projects/game-engine", "/Users/roman/dotfiles",
-                "/Users/roman/Projects/ml", "/Users/roman/side", "/Users/roman/cli",
-                "/Users/roman/zeta", "/Users/roman/omega", "/Users/roman/delta"]
-    let scale = 14, pad = 14, cols = 4
-    let images = cwds.map { appearance.image(for: ProjectIdentity.seed(forCWD: $0)) }
-        + [appearance.image(for: ProjectIdentity.seed(forCWD: cwds[0]), eyesClosed: true)]   // a blink frame
+    // Matrix: each row a different creature; columns show the rarity ladder at stage 1, then the
+    // same creature evolving (mythic s2, s3). Lets rarity (#5) and evolution (#6) be eyeballed.
+    let seeds: [UInt64] = [3, 21, 42, 99, 128, 777].map { ProjectIdentity.seed(forCWD: "/s/\($0)") }
+    let rarities: [Rarity] = [.common, .uncommon, .rare, .epic, .legendary, .mythic]
+    let scale = 14, pad = 14
+    let cols = rarities.count + 2   // + mythic stage 2 and stage 3
+    var images: [PixelImage] = []
+    for s in seeds {
+        for r in rarities { images.append(appearance.image(for: s, rarity: r, stage: 1)) }
+        images.append(appearance.image(for: s, rarity: .mythic, stage: 2))
+        images.append(appearance.image(for: s, rarity: .mythic, stage: 3))
+    }
     let cell = 7 * scale + pad
     let rows = (images.count + cols - 1) / cols
     let sheetW = cols * cell + pad, sheetH = rows * cell + pad
