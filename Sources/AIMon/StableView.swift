@@ -9,16 +9,16 @@ struct StableEntry: Identifiable {
     var id: UUID { aimon.id }
 }
 
-/// The Stable — a gallery of collectible trading cards, one per AIMon. Tap a card to flip it and
-/// read that creature's backstory on the back. Card art/frame styling escalates with rarity and
-/// evolution stage (à la MTG / Pokémon foils).
+/// The Aidex — a gallery of collectible trading cards, one per AIMon (aimon → ai-dex, à la
+/// Pokémon → Pokédex). Tap a card to flip it and read that creature's backstory on the back. Card
+/// art/frame styling escalates with rarity and evolution stage (à la MTG / Pokémon foils).
 struct StableView: View {
     let entries: [StableEntry]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("The Stable").font(.largeTitle.bold())
+                Text("Aidex").font(.largeTitle.bold())
                 Spacer()
                 Text("\(entries.count) collected").foregroundStyle(.secondary)
             }

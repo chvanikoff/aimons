@@ -2,13 +2,13 @@ import AppKit
 import SwiftUI
 import AIMonCore
 
-/// A normal titled window hosting the SwiftUI Stable gallery.
+/// A normal titled window hosting the SwiftUI Aidex gallery.
 final class StableWindow: NSWindow {
     init(entries: [StableEntry]) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 680, height: 520),
                    styleMask: [.titled, .closable, .resizable, .miniaturizable],
                    backing: .buffered, defer: false)
-        title = "The Stable"
+        title = "Aidex"
         isReleasedWhenClosed = false
         contentViewController = NSHostingController(rootView: StableView(entries: entries))
         center()

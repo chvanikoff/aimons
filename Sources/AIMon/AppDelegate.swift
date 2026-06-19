@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         visItem.state = .on
         menu.addItem(visItem)
         self.visibilityItem = visItem
-        menu.addItem(NSMenuItem(title: "Open the Stable…", action: #selector(openStable), keyEquivalent: "s"))
+        menu.addItem(NSMenuItem(title: "Open the Aidex…", action: #selector(openStable), keyEquivalent: "s"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Spawn random monster (dev)",
                                 action: #selector(spawnDevMonster), keyEquivalent: "n"))
