@@ -3,6 +3,8 @@ import XCTest
 
 final class ScaffoldTests: XCTestCase {
     func test_version_isSet() {
-        XCTAssertEqual(AIMonCore.version, "0.1.0")
+        // A non-empty semver-ish string; don't pin a literal so version bumps don't break the suite.
+        XCTAssertFalse(AIMonCore.version.isEmpty)
+        XCTAssertTrue(AIMonCore.version.contains("."))
     }
 }
