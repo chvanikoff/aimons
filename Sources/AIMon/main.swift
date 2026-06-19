@@ -184,6 +184,42 @@ if CommandLine.arguments.contains("--remint-personalities") {
     exit(0)
 }
 
+// Hidden dev mode: `AIMon --app-icon <out.png>` renders a 1024×1024 app icon (a mythic creature on
+// a rounded gradient tile) for the .app bundle / DMG.
+if CommandLine.arguments.contains("--app-icon") {
+    guard let idx = CommandLine.arguments.firstIndex(of: "--app-icon"), idx + 1 < CommandLine.arguments.count else {
+        print("usage: AIMon --app-icon <out.png>"); exit(1)
+    }
+    let outPath = CommandLine.arguments[idx + 1]
+    let size = 1024, f = CGFloat(1024)
+    let cs = CGColorSpaceCreateDeviceRGB()
+    guard let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
+    // Rounded tile (transparent corners), macOS-ish proportions.
+    let inset = f * 0.10
+    let inner = CGRect(x: inset, y: inset, width: f - 2 * inset, height: f - 2 * inset)
+    let corner = inner.width * 0.2237
+    ctx.addPath(CGPath(roundedRect: inner, cornerWidth: corner, cornerHeight: corner, transform: nil))
+    ctx.clip()
+    let colors = [CGColor(red: 0.20, green: 0.17, blue: 0.45, alpha: 1),
+                  CGColor(red: 0.42, green: 0.24, blue: 0.66, alpha: 1)] as CFArray
+    if let grad = CGGradient(colorsSpace: cs, colors: colors, locations: [0, 1]) {
+        ctx.drawLinearGradient(grad, start: CGPoint(x: 0, y: f), end: CGPoint(x: f, y: 0), options: [])
+    }
+    // A flashy resident, big and pixel-crisp, centered.
+    let seed = ProjectIdentity.seed(forCWD: "/Users/roman/Projects/aimon")
+    if let cg = ProceduralAppearance().image(for: seed, rarity: .mythic, stage: 3).makeCGImage() {
+        ctx.interpolationQuality = .none
+        let draw = f * 0.60, o = (f - draw) / 2
+        ctx.draw(cg, in: CGRect(x: o, y: o, width: draw, height: draw))
+    }
+    if let out = ctx.makeImage(),
+       let data = NSBitmapImageRep(cgImage: out).representation(using: .png, properties: [:]) {
+        try? data.write(to: URL(fileURLWithPath: outPath)); print("wrote \(outPath)")
+    }
+    exit(0)
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

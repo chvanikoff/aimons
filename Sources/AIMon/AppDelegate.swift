@@ -16,7 +16,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastSpokeByCwd: [String: Date] = [:]            // cwd -> last time the monster spoke (cadence)
     private var aimonByCwd: [String: AIMon] = [:]                // cwd -> resident AIMon (cached from registry)
     private var behaviorByCwd: [String: BehaviorProfile] = [:]   // cwd -> personality-derived behaviour
-    private var devCompanions: [CompanionWindow] = []
     private var aimonsVisible = true
     private let speechCooldown: TimeInterval = 4
     private let newSessionXP = 3     // experience gained when a genuinely new session begins
@@ -36,21 +35,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.title = "👾"
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "AIMon (preview)", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "AIMon", action: nil, keyEquivalent: ""))
+        menu.addItem(.separator())
         let visItem = NSMenuItem(title: "Show AIMons", action: #selector(toggleVisibility), keyEquivalent: "")
         visItem.state = .on
         menu.addItem(visItem)
         self.visibilityItem = visItem
         menu.addItem(NSMenuItem(title: "Open the Aidex…", action: #selector(openStable), keyEquivalent: "s"))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Spawn random monster (dev)",
-                                action: #selector(spawnDevMonster), keyEquivalent: "n"))
-        menu.addItem(NSMenuItem(title: "Despawn dev monsters",
-                                action: #selector(despawnDevMonsters), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Grant XP to active AIMons (dev)",
-                                action: #selector(grantDevXP), keyEquivalent: ""))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit",
+        menu.addItem(NSMenuItem(title: "Quit AIMon",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         item.menu = menu
         self.statusItem = item
@@ -76,7 +69,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         projectWindows.forEach { persistFrame($1, forCWD: $0) }   // remember positions across launches
         projectWindows.values.forEach { $0.retire() }
         projectWindows.removeAll()
-        despawnDevMonsters()
     }
 
     // MARK: - Project-driven windows (one per directory)
@@ -286,33 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         aimonsVisible.toggle()
         visibilityItem?.state = aimonsVisible ? .on : .off
         projectWindows.values.forEach { $0.setVisible(aimonsVisible) }   // hides bubble too
-        devCompanions.forEach { aimonsVisible ? $0.orderFrontRegardless() : $0.orderOut(nil) }
         Log.lifecycle.notice("aimons \(aimonsVisible ? "visible" : "hidden")")   // watcher keeps running
-    }
-
-    // MARK: - Dev affordance
-
-    @objc private func spawnDevMonster() {
-        let seed = UInt64.random(in: 0..<UInt64.max)
-        // Showcase the range: a random rarity and stage so dev spawns exercise the new looks.
-        let rarity = Rarity.allCases.randomElement() ?? .common
-        let stage = Int.random(in: 1...Evolution.maxStage)
-        let open = appearance.image(for: seed, rarity: rarity, stage: stage)
-        let closed = appearance.image(for: seed, rarity: rarity, stage: stage, eyesClosed: true)
-        let window = CompanionWindow(image: open, closedEyesImage: closed, name: NameGenerator.name(seed: seed))
-        cascade(window, index: devCompanions.count)
-        if aimonsVisible { window.orderFrontRegardless() }
-        devCompanions.append(window)
-    }
-
-    /// Dev: fast-forward evolution by granting a chunk of xp to every live AIMon.
-    @objc private func grantDevXP() {
-        for cwd in projectWindows.keys { grantXP(10, to: cwd) }
-    }
-
-    @objc private func despawnDevMonsters() {
-        devCompanions.forEach { $0.retire() }
-        devCompanions.removeAll()
     }
 
     private func cascade(_ window: CompanionWindow, index: Int) {
