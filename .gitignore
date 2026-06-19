@@ -1,4 +1,16 @@
-.superpowers/
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Swift / SwiftPM
 .build/
+.swiftpm/
+*.xcuserstate
+Package.resolved
+
+# Build output / releases
 dist/
 *.dmg
+
+# Tooling
+.superpowers/
