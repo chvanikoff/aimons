@@ -6,12 +6,14 @@ import AIMonCore
 /// fallback. One bubble per event — no instant-placeholder-then-swap (that produced a jarring
 /// second bubble whenever the model answered after the first bubble had dismissed).
 final class SpeechEngine {
-    private let ollama: OllamaProvider?
     private let deadline: TimeInterval
+    /// Resolves the Ollama model to use *right now* (reflecting live settings), or nil to skip the
+    /// LLM tier entirely and use the template floor.
+    private let modelResolver: () -> String?
 
-    init(ollama: OllamaProvider? = OllamaProvider(), deadline: TimeInterval = 4) {
-        self.ollama = ollama
+    init(deadline: TimeInterval = 4, modelResolver: @escaping () -> String? = { nil }) {
         self.deadline = deadline
+        self.modelResolver = modelResolver
     }
 
     func speak(_ context: SpeechContext, present: @escaping (String) -> Void) {
@@ -22,10 +24,12 @@ final class SpeechEngine {
     }
 
     private func resolveLine(for context: SpeechContext) async -> String {
-        if let ollama, let llm = await firstWithinDeadline({ try? await ollama.line(for: context) }),
-           !llm.isEmpty {
-            Log.lifecycle.debug("ollama line: \(llm)")
-            return llm
+        if let model = modelResolver() {
+            let provider = OllamaProvider(model: model)
+            if let llm = await firstWithinDeadline({ try? await provider.line(for: context) }), !llm.isEmpty {
+                Log.lifecycle.debug("ollama line (\(model)): \(llm)")
+                return llm
+            }
         }
         return TemplateSpeech.line(trigger: context.trigger, archetype: context.archetype,
                                    variant: context.sessionCount)

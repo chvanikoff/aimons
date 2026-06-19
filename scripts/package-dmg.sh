@@ -62,11 +62,33 @@ codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP" && echo "  signature OK"
 
 echo "▶ building ${DMG}…"
+ICNS="$APP/Contents/Resources/AppIcon.icns"
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
+cp "$ICNS" "$STAGE/.VolumeIcon.icns"          # icon shown when the DMG is mounted
+
+# Build read-write first so we can flag the volume's custom-icon bit, then compress.
+RW="$(mktemp -d)/rw.dmg"
+hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -fs HFS+ -format UDRW -ov "$RW" >/dev/null
+MNT="$(mktemp -d)"
+hdiutil attach "$RW" -nobrowse -mountpoint "$MNT" >/dev/null
+xcrun SetFile -a C "$MNT" 2>/dev/null || true   # mark the volume as having a custom icon
+hdiutil detach "$MNT" >/dev/null
 rm -f "$DMG"
-hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+hdiutil convert "$RW" -format UDZO -o "$DMG" >/dev/null
+
+# Give the .dmg FILE itself a Finder icon (so it's not a generic disk image in Downloads).
+if xcrun -f Rez >/dev/null 2>&1; then
+  TMP="$(mktemp -d)"; cp "$ICNS" "$TMP/icon.icns"
+  sips -i "$TMP/icon.icns" >/dev/null
+  xcrun DeRez -only icns "$TMP/icon.icns" > "$TMP/icon.rsrc"
+  xcrun Rez -append "$TMP/icon.rsrc" -o "$DMG"
+  xcrun SetFile -a C "$DMG"
+  echo "  set .dmg file icon"
+else
+  echo "  (skipped .dmg file icon — Rez not available; volume icon still set)"
+fi
 
 echo ""
 echo "✅ done → $DMG"

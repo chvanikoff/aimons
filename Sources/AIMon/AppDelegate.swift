@@ -7,9 +7,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appearance: AppearanceProvider = ProceduralAppearance()
     private let watcher = TranscriptWatcher()
 
-    private let speechEngine = SpeechEngine()
+    private let settingsStore = SettingsStore()
+    private lazy var speechEngine = SpeechEngine(modelResolver: { [weak self] in self?.currentOllamaModel() })
     private let registry = AIMonRegistry()
     private let focuser = SessionFocuser()
+    // Created on first use, always from the main thread (menu action / launch check).
+    private lazy var settingsVM = MainActor.assumeIsolated { SettingsViewModel(store: self.settingsStore) }
+    private var settingsWindow: SettingsWindow?
 
     private var projectWindows: [String: CompanionWindow] = [:]   // cwd -> window (one monster per project)
     private var sessionCountByCwd: [String: Int] = [:]           // cwd -> last seen live session count
@@ -42,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(visItem)
         self.visibilityItem = visItem
         menu.addItem(NSMenuItem(title: "Open the Aidex…", action: #selector(openStable), keyEquivalent: "s"))
+        menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit AIMon",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -60,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activity.tolerance = 1
         RunLoop.main.add(activity, forMode: .common)
         activityTimer = activity
+
+        checkOllamaOnLaunch()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -270,6 +277,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stableWindow = window
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    // MARK: - Settings & Ollama
+
+    /// The model the speech engine should use right now: the selected one if Ollama speech is on,
+    /// else nil (→ template lines). If Ollama is off or the server is down, OllamaProvider just
+    /// fails within the deadline and we fall back to templates anyway.
+    private func currentOllamaModel() -> String? {
+        let s = settingsStore.settings
+        return s.ollamaEnabled ? s.selectedModel : nil
+    }
+
+    @objc private func openSettings() {
+        let window = settingsWindow ?? SettingsWindow(viewModel: settingsVM)
+        settingsWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// On launch: if Ollama is running but there's no suitable model for this Mac (and the user
+    /// hasn't picked one or declined before), offer to download the recommended one.
+    private func checkOllamaOnLaunch() {
+        guard settingsStore.settings.ollamaEnabled else { return }
+        Task { @MainActor in
+            let service = OllamaService()
+            guard await service.isRunning() else { return }   // only nudge if it's actually up
+            let installed = await service.installedModels()
+            let rec = HardwareAdvisor.recommendedModel(forRAMBytes: ProcessInfo.processInfo.physicalMemory)
+
+            if installed.contains(rec.model) {
+                if settingsStore.settings.selectedModel == nil { settingsStore.update { $0.selectedModel = rec.model } }
+                return
+            }
+            if let other = installed.first {   // some usable model already present — just adopt it
+                if settingsStore.settings.selectedModel == nil { settingsStore.update { $0.selectedModel = other } }
+                return
+            }
+            guard settingsStore.settings.selectedModel == nil, !settingsStore.settings.dismissedModelOffer else { return }
+
+            let alert = NSAlert()
+            alert.messageText = "Give your AIMons a voice?"
+            alert.informativeText = "AIMon can talk using a local AI model via Ollama. Download the recommended model for your Mac — \(rec.model) (~\(String(format: "%.1f", rec.approxSizeGB)) GB)? You can change this anytime in Settings."
+            alert.addButton(withTitle: "Download")
+            alert.addButton(withTitle: "Not Now")
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertFirstButtonReturn {
+                openSettings()
+                settingsVM.download()
+            } else {
+                settingsStore.update { $0.dismissedModelOffer = true }
+            }
+        }
     }
 
     // MARK: - Visibility toggle
